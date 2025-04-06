@@ -103,3 +103,4 @@ ggplot2::ggplot() +
   ggplot2::scale_fill_distiller(palette = "Oranges", name = "tree ht. (m)", direction = 1) +
   ggplot2::theme_void() +
   ggplot2::theme(legend.position = "top", legend.direction = "horizontal")
+
