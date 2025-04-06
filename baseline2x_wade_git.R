@@ -294,12 +294,6 @@ ggplot() +
   theme_minimal() +
   ggtitle("LiDAR Point Density Within Tree Crowns")
 
-ggplot() +
-  geom_sf(data = density, aes(fill = point_density), color = "black", alpha = 0.7) +
-  geom_sf(data = lidar_sf, color = "white", size = 0.5, alpha = 0.5) +  # Overlay LiDAR points
-  scale_fill_viridis_c(option = "plasma", name = "LiDAR Density") +
-  theme_minimal() +
-  ggtitle("LiDAR Density with Individual Points")
 
 
 
