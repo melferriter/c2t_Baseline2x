@@ -47,6 +47,7 @@ library(sf)
 library(purrr)
 library(patchwork)
 library(viridis)
+library(dbplyr)
 
 
 rm(list = ls(globalenv()))
@@ -105,5 +106,51 @@ ggplot2::ggplot() +
   ggplot2::theme(legend.position = "top", legend.direction = "horizontal")
 
 
+----------------------------------------------
+# Individual Tree Detection (ITD) Tuning====
+----------------------------------------------
+## Default ITD window size functions====
+itd_tuning_ans <- itd_tuning(input_las_dir = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/2x/2xBaseline_20241021232243_clip.las")
+
+itd_tuning_ans %>% names()
+
+itd_tuning_ans$plot_samples
+
+best_ws <- itd_tuning_ans$ws_fn_list$lin_fn
+
+ggplot2::ggplot() +
+  ggplot2::geom_function(fun = best_ws, color = "brown", lwd = 1) +
+  ggplot2::xlim(-5,60) +
+  ggplot2::labs(x = "heights", y = "ws", color = "") +
+  ggplot2::theme_light()
+
+# a constant window size has to be defined as:
+## x*0 + constant
+my_constant <- function(x){(x * 0) + 3} ## will always return 3
+# a custom linear function
+my_linear <- function(x) {(x * 0.1) + 3}
+# another custom
+my_custom2 <- function(x) {0.15 * x^0.6 + 2}
+# let's put these in a list to test with the best default function we saved from above
+my_fn_list <- list(
+  my_constant = my_constant
+  , my_linear = my_custom2
+  , best_default_ws = best_ws
+)
+
+# run it with custom functions
+itd_tuning_ans2 <- itd_tuning(
+  input_las_dir = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/2x/2xBaseline_20241021232243_clip.las"
+  , ws_fn_list = my_fn_list
+  , n_samples = 2
+)
+
+# look at the tuning plot
+itd_tuning_ans2$plot_samples
 
 
+ggplot2::ggplot() +
+  ggplot2::geom_function(fun = my_custom2, color = "brown", lwd = 1) +
+  ggplot2::xlim(-5,60) +
+  ggplot2::labs(x = "heights", y = "ws", color = "") +
+  ggplot2::theme_light()
