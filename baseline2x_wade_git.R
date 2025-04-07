@@ -124,6 +124,7 @@ ggplot2::ggplot() +
   ggplot2::labs(x = "heights", y = "ws", color = "") +
   ggplot2::theme_light()
 
+#h
 # a constant window size has to be defined as:
 ## x*0 + constant
 my_constant <- function(x){(x * 0) + 3} ## will always return 3
