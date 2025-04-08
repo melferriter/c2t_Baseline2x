@@ -219,7 +219,7 @@ cloud2trees_ans_c$crowns_sf %>%
   ggplot2::labs(x = "tree ht. (m)", y = "tree CBH (m)") +
   ggplot2::scale_y_continuous(breaks = scales::extended_breaks(n=12)) +
   ggplot2::scale_x_continuous(breaks = scales::extended_breaks(n=14)) +
-  ggplot2::scale_color_viridis_d(alpha = 0.8, name = "is CBH\nfrom cloud?") +
+  ggplot2::scale_color_viridis_d(alpha = 0.8, name = "is CBH/nfrom cloud?") +
   ggplot2::theme_light()
 
 
@@ -258,7 +258,7 @@ plt_ht + plt_dbh + plt_cbh + patchwork::plot_layout(ncol = 2) &
 cloud2trees_ans_c$treetops_sf %>%
   ggplot2::ggplot(mapping = ggplot2::aes(color = comp_dist_to_nearest_m)) + 
   ggplot2::geom_sf() +
-  ggplot2::scale_color_distiller(palette = "Greys", name = "distance to\nnearest tree", direction = 1) +
+  ggplot2::scale_color_distiller(palette = "Greys", name = "distance to/nnearest tree", direction = 1) +
   ggplot2::theme_void() +
   ggplot2::theme(legend.position = "top", legend.direction = "horizontal")
 
@@ -295,7 +295,7 @@ ggplot() +
   ggtitle("LiDAR Point Density Within Tree Crowns")
 
 
-#histograms
+# histograms
 # Check available columns
 colnames(cloud2trees_ans_c$crowns_sf)
 
@@ -365,6 +365,99 @@ hist(cloud2trees_ans_c$crowns_sf$crown_area_m2[cloud2trees_ans_c$crowns_sf$crown
      main="Crown Areas > 10 m²", 
      xlab="Crown Area (m²)")
 par(mfrow=c(1,1))
+
+
+---------------------------------------------
+# DBH Model====
+---------------------------------------------
+
+library(pacman)
+
+pacman::p_load(ggplot2, rgeos, propagate, dplyr, ggpubr, gridExtra)
+  
+setwd(regional_input)
+regional.trees <- read.csv("C:/Users/User/Desktop/wade_trainingdata.csv")  
+
+dbh.cm <- regional.trees$dbh.cm
+ht.m <- regional.trees$ht.m
+  
+dbh.mod <- nls(dbh.cm ~ b * ht.m^z, 
+                 start = list(b = 2.2, z = 1))
+
+dbh.mod.gs_mixed <- nls(dbh.cm ~ b * ht.m^z, 
+                        start = list(b = 1.5, z = 0.8),
+                        # Optional: if you have weights to give more importance to certain trees
+                        # weights = weights_vector,
+                        control = nls.control(maxiter = 100))
+
+# More complex model with species-specific parameters
+dbh.mod.mixed <- nls(dbh.cm ~ ifelse(species == "sequoia", 
+                                     b_seq * ht.m^z_seq, 
+                                     b_hw * ht.m^z_hw), 
+                     start = list(b_seq = 1.5, z_seq = 0.8, 
+                                  b_hw = 2.0, z_hw = 0.95))
+
+summary(dbh.mod.gs_mixed)
+regional.dbh.parameters <- dbh.mod.gs_mixed$m$getPars()
+
+
+#H = 2.5 × (DBH)^.7
+
+# Extract heights from cloud2trees
+tree_heights <- cloud2trees_ans_c$crowns_sf$tree_height_m
+
+# Example field data (you would use your actual measurements)
+field_data <- data.frame(
+  tree_id = c(1, 2, 3), 
+  dbh_cm = c(200, 300, 150),
+  height_m = c(75, 90, 50)
+)
+
+field_data_test <- read.csv("C:/Users/User/Desktop/wade_trainingdata.csv")
+
+# Fit the model using your field measurements
+dbh.mod.gs_mixed <- nls(dbh_cm ~ b * height_m^z, 
+                        data = field_data_test,
+                        start = list(b = 1.5, z = 0.8),
+                        control = nls.control(maxiter = 100))
+
+# View model summary
+summary(dbh.mod.gs_mixed)
+
+
+# Extract model coefficients
+b_coef <- coef(dbh.mod.gs_mixed)["b"]
+z_coef <- coef(dbh.mod.gs_mixed)["z"]
+
+# Predict DBH for all trees in cloud2trees output
+cloud2trees_ans_c$crowns_sf$predicted_dbh_cm <- b_coef * cloud2trees_ans_c$crowns_sf$tree_height_m^z_coef
+
+plt_dbh <-
+  cloud2trees_ans_c$crowns_sf %>% 
+  ggplot2::ggplot(mapping = ggplot2::aes(fill = predicted_dbh_cm)) + 
+  ggplot2::geom_sf() + 
+  ggplot2::scale_fill_distiller(palette = "Purples", name = "tree DBH (cm)", direction = 1) +
+  ggplot2::theme_void() 
+
+ggplot2::ggplot() + 
+  ggplot2::geom_sf(data = cloud2trees_ans_c$crowns_sf, mapping = ggplot2::aes(fill = predicted_dbh_cm)) + 
+  ggplot2::scale_fill_distiller(palette = "Purples", name = "tree dbh (cm)", direction = 1) +
+  ggplot2::theme_void() +
+  ggplot2::theme(legend.position = "top", legend.direction = "horizontal")
+
+summary(cloud2trees_ans_c$crowns_sf$predicted_dbh_cm)
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
