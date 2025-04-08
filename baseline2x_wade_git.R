@@ -421,7 +421,7 @@ regional.dbh.parameters <- dbh.mod.gs_mixed$m$getPars()
 # Extract heights from cloud2trees
 tree_heights <- cloud2trees_ans_c$crowns_sf$tree_height_m
 
-# Example field data (you would use your actual measurements)
+# Example field data 
 field_data <- data.frame(
   tree_id = c(1, 2, 3), 
   dbh_cm = c(200, 300, 150),
