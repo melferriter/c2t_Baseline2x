@@ -481,12 +481,26 @@ plot(validation_data$dbh.cm, validation_data$predicted_dbh,
 abline(0, 1, col = "red")
 
 
+# exclude small DBH trees
+# Create a new validation dataset excluding small DBH trees
+validation_data_filtered <- validation_data[validation_data$dbh.cm > 60, ]
+
+# Check the dimensions of your original and filtered datasets
+cat("Original validation data rows:", nrow(validation_data), "\n")
+cat("Filtered validation data rows:", nrow(validation_data_filtered), "\n")
+
+# Recalculate RMSE with the filtered dataset
+if(nrow(validation_data_filtered) > 0) {
+  validation_data_filtered$predicted_dbh <- b_coef * validation_data_filtered$height_m^z_coef
+  validation_data_filtered$error <- validation_data_filtered$predicted_dbh - validation_data_filtered$dbh.cm
+  
+  rmse_filtered <- sqrt(mean(validation_data_filtered$error^2))
+  print(paste("RMSE for trees with DBH > 60 cm:", rmse_filtered))
+}
 
 
-
-
-
-
-
-
+# sort by error
+new_df <- validation_data %>% 
+  # desc orders from largest to smallest
+  arrange(desc(error)) 
 
