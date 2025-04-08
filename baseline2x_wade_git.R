@@ -124,7 +124,6 @@ ggplot2::ggplot() +
   ggplot2::labs(x = "heights", y = "ws", color = "") +
   ggplot2::theme_light()
 
-#h
 # a constant window size has to be defined as:
 ## x*0 + constant
 my_constant <- function(x){(x * 0) + 3} ## will always return 3
@@ -164,11 +163,11 @@ input_las_dir = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222
 
 cloud2trees_ans_c <- cloud2trees::cloud2trees(
   output_dir = tempdir()
-  , input_las_dir = input_las_dir
+  , input_las_dir = i
   , dtm_res_m = 0.5
   , ws = my_custom2
   , estimate_tree_dbh = TRUE
-  , estimate_tree_type = TRUE
+  , estimate_tree_type = FALSE
   , estimate_tree_competition = TRUE
   , estimate_tree_cbh = TRUE
   , cbh_tree_sample_n = 555
@@ -271,10 +270,10 @@ cloud2trees_ans_c$treetops_sf %>%
 # Convert LAS object to a dataframe
 lidar_df <- as.data.frame(las@data)  # Extract X, Y, Z coordinates
 
-# Convert to an sf object (ensure same CRS as convex_hulls)
+# Convert to an sf object (ensure same CRS as tree crowns)
 lidar_sf <- st_as_sf(lidar_df, coords = c("X", "Y"), crs = st_crs(cloud2trees_ans_c$crowns_sf))
 
-# Find which LiDAR points are inside each convex hull
+# Find which LiDAR points are inside each crown area
 intersections <- st_intersects(cloud2trees_ans_c$crowns_sf, lidar_sf, sparse = TRUE)
 
 # Count LiDAR points per treeID
@@ -283,7 +282,7 @@ lidar_counts <- data.frame(
   point_count = lengths(intersections)  # Number of LiDAR points per hull
 )
 
-# Merge with convex hulls and compute density
+# Merge with tree crowns and compute density
 density <- cloud2trees_ans_c$crowns_sf %>%
   left_join(lidar_counts, by = "treeID") %>%
   mutate(point_density = point_count / as.numeric(st_area(geometry)))
@@ -296,12 +295,76 @@ ggplot() +
   ggtitle("LiDAR Point Density Within Tree Crowns")
 
 
+#histograms
+# Check available columns
+colnames(cloud2trees_ans_c$crowns_sf)
+
+# Summary of tree heights
+summary(cloud2trees_ans_c$crowns_sf$tree_height_m)
+
+ggplot(cloud2trees_ans_c$crowns_sf, aes(x = tree_height_m)) +
+  geom_histogram(binwidth = 2, fill = "blue", color = "black", alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Histogram of Canopy Heights",
+       x = "Tree Height (m)",
+       y = "Frequency") +
+  scale_x_continuous(breaks = seq(0, max(cloud2trees_ans_c$crowns_sf$tree_height_m, na.rm = TRUE), by = 5))
 
 
+# Summary of crown area
+summary(cloud2trees_ans_c$crowns_sf$crown_area_m2)
+
+ggplot(cloud2trees_ans_c$crowns_sf, aes(x = crown_area_m2)) +
+  geom_histogram(binwidth = 2, fill = "blue", color = "black", alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Histogram of Canopy Area",
+       x = "Canopy Area (m²)",
+       y = "Frequency") +
+  scale_x_continuous(breaks = seq(0, max(cloud2trees_ans_c$crowns_sf$crown_area_m2, na.rm = TRUE), by = 30))
+
+# Summary of crown area
+summary(cloud2trees_ans_c$crowns_sf$crown_area_m2)
+
+hist(cloud2trees_ans_c$crowns_sf$crown_area_m2, breaks=30)
+boxplot(cloud2trees_ans_c$crowns_sf$crown_area_m2)
+
+# Find the top 5 largest crown areas
+head(sort(cloud2trees_ans_c$crowns_sf$crown_area_m2, decreasing=TRUE), 5)
+
+# Identify which crown polygons have these large areas
+large_crowns <- which(cloud2trees_ans_c$crowns_sf$crown_area_m2 > 10)
+
+# Plot all crowns
+plot(cloud2trees_ans_c$crowns_sf["crown_area_m2"])
+
+# Highlight the problematic crowns in a different color
+plot(cloud2trees_ans_c$crowns_sf[large_crowns,], col="red", add=TRUE)
 
 
+hist(log10(cloud2trees_ans_c$crowns_sf$crown_area_m2), 
+     breaks=30, 
+     main="Histogram of log10(Crown Area)", 
+     xlab="log10(Crown Area m²)")
 
 
+boxplot(cloud2trees_ans_c$crowns_sf$crown_area_m2,
+        main="Crown Area Distribution",
+        ylab="Crown Area (m²)")
+
+
+plot(density(cloud2trees_ans_c$crowns_sf$crown_area_m2),
+     main="Density Plot of Crown Areas",
+     xlab="Crown Area (m²)")
+
+
+par(mfrow=c(1,2))
+hist(cloud2trees_ans_c$crowns_sf$crown_area_m2[cloud2trees_ans_c$crowns_sf$crown_area_m2 <= 10],
+     main="Crown Areas ≤ 10 m²", 
+     xlab="Crown Area (m²)")
+hist(cloud2trees_ans_c$crowns_sf$crown_area_m2[cloud2trees_ans_c$crowns_sf$crown_area_m2 > 10],
+     main="Crown Areas > 10 m²", 
+     xlab="Crown Area (m²)")
+par(mfrow=c(1,1))
 
 
 
