@@ -130,33 +130,23 @@ ttops <- locate_trees(chm_0.1, lmf())
 ###############################################################################
 
 ### Remove points above 4 m to reduce memory requirements #####################
-las <- filter_poi(las, Z < 40)
+las <- filter_poi(las, Z < 50)
 las <- filter_poi(las1, Z > 0.1)
-las <- las2
 x = plot(las)
-las_check(las2)
-beep(3)
+
 ### Extract tree map from a thinned point cloud ###############################
-map <- treeMap(las, map.hough(min_h = .5,             # Slightly wider range
-                              min_density = 0.005,    # Lower for sparse points
+map <- treeMap(las, map.hough(min_h = .5,             
+                              min_density = 0.0005,    
                               max_d = 15)) 
 
-map1 <- treeMap(las1, map.eigen.voxel(
-  max_curvature = 0.15,
-  max_verticality = 15,
-  voxel_spacing = 0.1,
-  max_d = 9
-))
 beep(3)
 
 add_treeMap(x, map, color = "yellow", size = 2)
-add_treetops3d(x, map)
 plot(map)
 
 ### Classify tree regions #####################################################
-las <- treePoints(las1, map1, trp.crop())
+las <- treePoints(las, map, trp.crop())
 add_treePoints(x, las, size = 9)
-add_treeIDs(x, las, cex = 2, col = "yellow")
 
 ### Classify stem points ######################################################
 las <- stemPoints(las, stm.hough(max_d = 15))
@@ -179,6 +169,8 @@ xy <- dbh_locations[,c(2,3)]
 dbh_shape <- SpatialPointsDataFrame(coords = xy, data = dbh_locations)
 
 plot(dbh_shape, add = TRUE, col = "blue")
+
+#H = 2.5 × (DBH)^.7
 
 ###############################################################################
 ###                Write out derived data products                          ###
