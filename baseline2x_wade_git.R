@@ -258,7 +258,22 @@ plt_ht + plt_dbh + plt_cbh + patchwork::plot_layout(ncol = 2) &
 cloud2trees_ans_c$treetops_sf %>%
   ggplot2::ggplot(mapping = ggplot2::aes(color = comp_dist_to_nearest_m)) + 
   ggplot2::geom_sf() +
-  ggplot2::scale_color_distiller(palette = "Greys", name = "distance to/nnearest tree", direction = 1) +
+  ggplot2::scale_color_distiller(palette = "Greys", name = "distance to nearest tree", direction = 1) +
+  ggplot2::theme_void() +
+  ggplot2::theme(legend.position = "top", legend.direction = "horizontal")
+
+
+# plot tree top points on top of tree crowns 
+ggplot2::ggplot() + 
+  ggplot2::geom_sf(data = cloud2trees_ans_c$crowns_sf, mapping = ggplot2::aes(fill = cloud2trees_ans_c$crowns_sf$predicted_dbh_cm)) + 
+  ggplot2::scale_fill_distiller(palette = "Purples", name = "tree DBH (cm)", direction = 1) +
+  ggplot2::theme_void() +
+  ggplot2::theme(legend.position = "top", legend.direction = "horizontal")
+
+cloud2trees_ans_c$crowns_sf %>% 
+  ggplot2::ggplot(mapping = ggplot2::aes(fill = tree_cbh_m)) + 
+  ggplot2::geom_sf() + 
+  ggplot2::scale_fill_distiller(palette = "Greens", name = "tree CBH (m)", direction = 1) +
   ggplot2::theme_void() +
   ggplot2::theme(legend.position = "top", legend.direction = "horizontal")
 
@@ -448,11 +463,22 @@ ggplot2::ggplot() +
 summary(cloud2trees_ans_c$crowns_sf$predicted_dbh_cm)
 
 
+# If you have a validation dataset
+validation_data <- field_data_test
 
+# Calculate prediction errors
+validation_data$predicted_dbh <- b_coef * validation_data$ht.m^z_coef
+validation_data$error <- validation_data$predicted_dbh - validation_data$dbh.cm
 
+# Calculate RMSE
+rmse <- sqrt(mean(validation_data$error^2))
+print(paste("RMSE:", rmse))
 
-
-
+# Plot predicted vs observed
+plot(validation_data$dbh.cm, validation_data$predicted_dbh,
+     xlab = "Measured DBH (cm)", ylab = "Predicted DBH (cm)",
+     main = "Validation of DBH-Height Model")
+abline(0, 1, col = "red")
 
 
 
