@@ -463,7 +463,7 @@ ggplot2::ggplot() +
 summary(cloud2trees_ans_c$crowns_sf$predicted_dbh_cm)
 
 
-# If you have a validation dataset
+# validation dataset
 validation_data <- field_data_test
 
 # Calculate prediction errors
