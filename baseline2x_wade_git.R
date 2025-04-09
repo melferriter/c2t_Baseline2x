@@ -63,6 +63,10 @@ setwd("E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed
 las <- readLAS("E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/2x/2xBaseline_20241021232243_clip.las", filter = "-set_withheld_flag 0")
 i <- "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/2x/2xBaseline_20241021232243_clip.las"
 
+plot(las)
+
+controlpoints <- st_read("C:/Users/User/Desktop/ControlPoints.shp")
+
 # run cloud2trees without customization
 cloud2trees_ans <- cloud2trees::cloud2trees(output_dir = tempdir(), input_las_dir = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/2x/2xBaseline_20241021232243_clip.las")
 
@@ -100,11 +104,10 @@ cloud2trees_ans$treetops_sf %>%
 # plot tree top points on top of tree crowns 
 ggplot2::ggplot() + 
   ggplot2::geom_sf(data = cloud2trees_ans$crowns_sf, mapping = ggplot2::aes(fill = tree_height_m)) + 
-  ggplot2::geom_sf(data = cloud2trees_ans$treetops_sf, shape = 20) + 
+  ggplot2::geom_sf(data = cloud2trees_ans$treetops_sf, colour = "black", size =.5) +  #shape = 20
   ggplot2::scale_fill_distiller(palette = "Oranges", name = "tree ht. (m)", direction = 1) +
   ggplot2::theme_void() +
   ggplot2::theme(legend.position = "top", legend.direction = "horizontal")
-
 
 ----------------------------------------------
 # Individual Tree Detection (ITD) Tuning====
@@ -159,7 +162,7 @@ ggplot2::ggplot() +
 #Extract Trees from Point Cloud: Custom====
 ----------------------------------------------
   
-input_las_dir = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/2x/2xBaseline_20241021232243_clip.las"  
+i = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/2x/2xBaseline_20241021232243_clip.las"  
 
 cloud2trees_ans_c <- cloud2trees::cloud2trees(
   output_dir = tempdir()
@@ -428,11 +431,11 @@ field_data <- data.frame(
   height_m = c(75, 90, 50)
 )
 
-field_data_test <- read.csv("C:/Users/User/Desktop/wade_trainingdata.csv")
+field_data <- read.csv("C:/Users/User/Desktop/wade_trainingdata.csv")
 
 # Fit the model using your field measurements
 dbh.mod.gs_mixed <- nls(dbh_cm ~ b * height_m^z, 
-                        data = field_data_test,
+                        data = field_data,
                         start = list(b = 1.5, z = 0.8),
                         control = nls.control(maxiter = 100))
 
@@ -503,4 +506,17 @@ if(nrow(validation_data_filtered) > 0) {
 new_df <- validation_data %>% 
   # desc orders from largest to smallest
   arrange(desc(error)) 
+
+
+# Filter to get only snags (trees with crown area < 2 m²)
+snags_sf <- cloud2trees_ans_c$crowns_sf[cloud2trees_ans_c$crowns_sf$crown_area_m2 < 2, ]
+
+# Plot only the snags
+ggplot2::ggplot() + 
+  ggplot2::geom_sf(data = snags_sf, mapping = ggplot2::aes(fill = tree_height_m)) + 
+  ggplot2::theme_void() +
+  ggplot2::ggtitle("Snags (Crown Area < 2 m²)") +
+  ggplot2::theme(legend.position = "top", 
+                 legend.direction = "horizontal",
+                 plot.title = ggplot2::element_text(hjust = 0.5))
 
