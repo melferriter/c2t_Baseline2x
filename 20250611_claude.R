@@ -54,7 +54,8 @@ library(nngeo)
 pacman::p_load(ggplot2, rgeos, propagate, dplyr, ggpubr, gridExtra)
 
 rm(list = ls(globalenv()))
-------------------
+
+-------------------------------------------------------------------------
   
 cloud2trees_ans <- cloud2trees::cloud2trees(output_dir = tempdir(), input_las_dir = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/2x/2xBaseline_20241021232243_clip.las")
 
@@ -82,191 +83,82 @@ cloud2trees_ans_c_nosnag <- cloud2trees_ans_c
 cloud2trees_ans_c_nosnag$treetops_sf <- cloud2trees_ans_c$treetops_sf[cloud2trees_ans_c$treetops_sf$crown_area_m2 > 2, ]
 
 -------------------------------
-training_data_1 <- read.csv("C:/Users/User/Desktop/TrainingData_issequoia_2.csv")
+
+# Load and filter training data
+training_data_raw <- read.csv("C:/Users/User/Desktop/TrainingData_issequoia_2.csv")
+training_data <- training_data_raw %>% filter(tree_height_m > 10)
+
+# Split data by species
+sequoia_data     <- training_data %>% filter(is_sequoia == 1)
+nonsequoia_data  <- training_data %>% filter(is_sequoia == 0)
+
+# Fit separate models for each species
+model_seq <- lm(dbh_cm ~ tree_height_m + I(pmax(tree_height_m - 50, 0)), data = sequoia_data)
+model_nonseq <- lm(dbh_cm ~ tree_height_m + I(pmax(tree_height_m - 50, 0)), data = nonsequoia_data)
+
+# Visualize fits
+ggplot(training_data, aes(x = tree_height_m, y = dbh_cm, color = factor(is_sequoia))) +
+  geom_point() +
+  geom_smooth(data = sequoia_data, method = "lm", formula = y ~ x + I(pmax(x - 50, 0)), se = TRUE, color = "darkgreen") +
+  geom_smooth(data = nonsequoia_data, method = "lm", formula = y ~ x + I(pmax(x - 50, 0)), se = TRUE, color = "orange") +
+  labs(title = "Separate Piecewise Models for Sequoia and Non-Sequoia") +
+  theme_minimal()
+
+# Predict DBH for UAV-derived treetops
+cloud2trees_ans_c_nosnag$treetops_sf <- cloud2trees_ans_c_nosnag$treetops_sf %>% filter(tree_height_m > 10)
 
 cloud2trees_ans_c_nosnag$treetops_sf <- cloud2trees_ans_c_nosnag$treetops_sf %>%
-  filter(tree_height_m > 10)
- 
-training_data_filtered <- training_data_1 %>% 
-  filter(tree_height_m > 10)
+  mutate(is_sequoia = ifelse(tree_height_m > 50 & crown_area_m2 > 100, 1, 0))
 
-model <- lm(dbh_cm ~ tree_height_m + I(pmax(tree_height_m - 50, 0)), data = training_data_filtered)
- 
-# Check for outliers and data quality
-ggplot(training_data_1, aes(x = tree_height_m, y = dbh_cm, color = factor(is_sequoia))) +
-  geom_point() +
-  geom_smooth(method = "loess") +
-  #facet_wrap(~is_sequoia) +
-  theme_minimal()
 
-# Simple but effective for your data pattern
-piecewise_model <- lm(dbh_cm ~ tree_height_m + I(pmax(tree_height_m - 50, 0)), 
-                      data = training_data_1)
+cloud2trees_ans_c_nosnag$treetops_sf <- cloud2trees_ans_c_nosnag$treetops_sf %>%
+  mutate(predicted_dbh_cm = ifelse(is_sequoia == 1,
+                                   predict(model_seq, newdata = .),
+                                   predict(model_nonseq, newdata = .)))
 
-# Plot the fitted line over your data to see if it looks reasonable
-ggplot(training_data_filtered, aes(x = tree_height_m, y = dbh_cm)) +
-  geom_point(aes(color = factor(is_sequoia))) +
-  geom_smooth(method = "lm", formula = y ~ x + I(pmax(x - 50, 0)), se = TRUE) +
-  labs(title = "Piecewise Linear Model Fit") +
-  theme_minimal()
-
-# Predict DBH for all trees using the piecewise model
-cloud2trees_ans_c_nosnag$treetops_sf$predicted_dbh_cm <- predict(
-  piecewise_model, 
-  newdata = cloud2trees_ans_c_nosnag$treetops_sf
-)
-
-# Check for any negative predictions (shouldn't happen but good to verify)
-summary(cloud2trees_ans_c_nosnag$treetops_sf$predicted_dbh_cm)
-
-# Read control points and rename columns
+# Read and prepare control points
 controlpoints <- st_read("C:/Users/User/Desktop/ControlPoints_1.shp")
 names(controlpoints)[names(controlpoints) == "DBH"] <- "dbh_cm"
 names(controlpoints)[names(controlpoints) == "Hgt"] <- "tree_height_m"
-
 st_crs(controlpoints) <- 3857
-
-controlpoints_proj <- st_transform(controlpoints, 32611)
-
-# Ensure both layers are in the same CRS
 controlpoints <- st_transform(controlpoints, crs = st_crs(cloud2trees_ans_c_nosnag$treetops_sf))
 
-
+# Match predictions to control points
 treetops_xy <- st_coordinates(cloud2trees_ans_c_nosnag$treetops_sf)[, 1:2]
 control_xy  <- st_coordinates(controlpoints)[, 1:2]
-
-# Nearest neighbor search
 knn_result <- get.knnx(data = treetops_xy, query = control_xy, k = 1)
 nearest_ids <- knn_result$nn.index[, 1]
 distances <- knn_result$nn.dist[, 1]
-
-# Height difference filtering
 height_diff <- abs(controlpoints$tree_height_m - cloud2trees_ans_c_nosnag$treetops_sf$tree_height_m[nearest_ids])
 
-# Accept only matches within 5 meters distance and height diff
 valid_match <- which(distances <= 10 & height_diff <= 30)
 
-controlpoints$predicted_dbh_cm <- NA_real_
-controlpoints$tree_height_m <- NA_real_
+valid_data <- data.frame(
+  observed_dbh_cm   = controlpoints$dbh_cm[valid_match],
+  predicted_dbh_cm  = cloud2trees_ans_c_nosnag$treetops_sf$predicted_dbh_cm[nearest_ids[valid_match]],
+  observed_height_m = controlpoints$tree_height_m[valid_match],
+  predicted_height_m = cloud2trees_ans_c_nosnag$treetops_sf$tree_height_m[nearest_ids[valid_match]],
+  distance_m        = distances[valid_match],
+  height_diff_m     = height_diff[valid_match]
+)
 
-controlpoints$predicted_dbh_cm[valid_match] <- cloud2trees_ans_c_nosnag$treetops_sf$predicted_dbh_cm[nearest_ids[valid_match]]
-controlpoints$tree_height_m[valid_match]     <- cloud2trees_ans_c_nosnag$treetops_sf$tree_height_m[nearest_ids[valid_match]]
-
-summary(distances)
-summary(height_diff)
-
-# Subset only trees that have both field DBH and predicted DBH
-eval_subset <- subset(cloud2trees_ans_c_nosnag$treetops_sf, !is.na(dbh_cm) & !is.na(predicted_dbh_cm))
-
-# Calculate residuals
-eval_subset$residual_dbh <- eval_subset$dbh_cm - eval_subset$predicted_dbh_cm
-
-# R-squared
-r_squared <- 1 - sum(eval_subset$residual_dbh^2) / sum((eval_subset$dbh_cm - mean(eval_subset$dbh_cm))^2)
-r_squared
-
-
-
-
-
-
-
-
-# Try progressively looser criteria
-distance_thresholds <- c(3, 5, 7, 10, 15)
-height_thresholds <- c(5, 10, 15, 20, 30)
-
-for(d_thresh in distance_thresholds) {
-  for(h_thresh in height_thresholds) {
-    valid_match_test <- which(distances <= d_thresh & height_diff <= h_thresh)
-    cat("Distance ≤", d_thresh, "m, Height diff ≤", h_thresh, "m: ", 
-        length(valid_match_test), "matches\n")
-  }
-}
-
-# Look at the distribution of distances and height differences
-summary(distances)
-summary(height_diff)
-
-# Plot to see the distribution
-hist(distances, main = "Distance to nearest UAV tree", xlab = "Distance (m)")
-hist(height_diff, main = "Height difference", xlab = "Height difference (m)")
-
-# Are there systematic height differences?
-plot(controlpoints_proj$tree_height_m, 
-     cloud2trees_ans_c_nosnag$treetops_sf$tree_height_m[nearest_ids],
-     xlab = "Field height (m)", ylab = "UAV height (m)")
-abline(0, 1, col = "red")
-
-# Are there positioning issues?
-plot(distances, height_diff, 
-     xlab = "Distance (m)", ylab = "Height diff (m)")
-
-
-# Your existing matching code but with tighter criteria
-knn_result <- get.knnx(data = treetops_xy, query = control_xy, k = 1)
-nearest_ids <- knn_result$nn.index[, 1]
-distances <- knn_result$nn.dist[, 1]
-
-# Much stricter matching criteria
-height_diff <- abs(controlpoints_proj$tree_height_m - 
-                     cloud2trees_ans_c_nosnag$treetops_sf$tree_height_m[nearest_ids])
-valid_match <- which(distances <= 15 & height_diff <= 30)  # Tighter thresholds
-
-# Apply predictions only to valid matches
-controlpoints_proj$predicted_dbh_cm <- NA_real_
-controlpoints_proj$predicted_dbh_cm[valid_match] <- 
-  cloud2trees_ans_c_nosnag$treetops_sf$predicted_dbh_cm[nearest_ids[valid_match]]
-
-
-# Calculate metrics for matched points only
-valid_data <- controlpoints_proj[!is.na(controlpoints_proj$predicted_dbh_cm), ]
-valid_data$residual_dbh <- valid_data$dbh_cm - valid_data$predicted_dbh_cm
-
-# Compute metrics
+# Evaluate model performance
+valid_data$residual_dbh <- valid_data$observed_dbh_cm - valid_data$predicted_dbh_cm
 rmse <- sqrt(mean(valid_data$residual_dbh^2))
 bias <- mean(valid_data$residual_dbh)
-r2 <- cor(valid_data$dbh_cm, valid_data$predicted_dbh_cm)^2
+r_squared <- 1 - sum(valid_data$residual_dbh^2) / sum((valid_data$observed_dbh_cm - mean(valid_data$observed_dbh_cm))^2)
 
 cat("RMSE:", rmse, "cm\n")
-cat("Bias:", bias, "cm\n") 
-cat("R²:", r2, "\n")
-cat("n matched:", nrow(valid_data), "\n")
+cat("Bias:", bias, "cm\n")
+cat("R²:", r_squared, "\n")
 
-# Plot predicted vs observed
-ggplot(valid_data, aes(x = dbh_cm, y = predicted_dbh_cm)) +
+# Plot observed vs predicted
+ggplot(valid_data, aes(x = observed_dbh_cm, y = predicted_dbh_cm)) +
   geom_point() +
   geom_abline(slope = 1, intercept = 0, color = "red") +
-  labs(x = "Observed DBH (cm)", y = "Predicted DBH (cm)") +
+  labs(title = "Observed vs. Predicted DBH", x = "Observed DBH (cm)", y = "Predicted DBH (cm)") +
   theme_minimal()
-# 
 
-# Simple bias correction
-site_bias <- -89.14  # Your calculated bias
-corrected_predictions <- cloud2trees_ans_c_nosnag$treetops_sf$predicted_dbh_cm + site_bias
-
-# Update your treetops data
-cloud2trees_ans_c_nosnag$treetops_sf$predicted_dbh_cm_corrected <- corrected_predictions
-
-# Re-evaluate with corrected values
-controlpoints_proj$predicted_dbh_cm_corrected <- 
-  controlpoints_proj$predicted_dbh_cm + site_bias
-
-# ADD THIS LINE - update valid_data with corrected predictions
-valid_data$predicted_dbh_cm_corrected <- valid_data$predicted_dbh_cm + site_bias
-
-# Check new metrics
-new_residuals <- valid_data$dbh_cm - valid_data$predicted_dbh_cm_corrected
-new_rmse <- sqrt(mean(new_residuals^2))
-new_bias <- mean(new_residuals)
-
-cat("Corrected RMSE:", new_rmse, "cm\n")
-cat("Corrected Bias:", new_bias, "cm\n")
-
-# Plot predicted vs observed WITH site correction
-ggplot(valid_data, aes(x = dbh_cm, y = predicted_dbh_cm_corrected)) +
-  geom_point() +
-  geom_abline(slope = 1, intercept = 0, color = "red") +
-  labs(x = "Observed DBH (cm)", y = "Corrected Predicted DBH (cm)", 
-       title = "Site-Corrected DBH Predictions") +
-  theme_minimal()
+  
+  
+  
