@@ -78,6 +78,7 @@ cloud2trees_ans_c <- cloud2trees::cloud2trees(
   , cbh_estimate_missing_cbh = TRUE
 )
 
+cloud2trees_ans_c_nosnag <- cloud2trees_ans_c
 cloud2trees_ans_c_nosnag$treetops_sf <- cloud2trees_ans_c$treetops_sf[cloud2trees_ans_c$treetops_sf$crown_area_m2 > 2, ]
 
 -------------------------------
@@ -90,9 +91,6 @@ training_data_filtered <- training_data_1 %>%
   filter(tree_height_m > 10)
 
 model <- lm(dbh_cm ~ tree_height_m + I(pmax(tree_height_m - 50, 0)), data = training_data_filtered)
- 
-  
-  
  
 # Check for outliers and data quality
 ggplot(training_data_1, aes(x = tree_height_m, y = dbh_cm, color = factor(is_sequoia))) +
@@ -130,8 +128,48 @@ st_crs(controlpoints) <- 3857
 
 controlpoints_proj <- st_transform(controlpoints, 32611)
 
+# Ensure both layers are in the same CRS
+controlpoints <- st_transform(controlpoints, crs = st_crs(cloud2trees_ans_c_nosnag$treetops_sf))
+
+
 treetops_xy <- st_coordinates(cloud2trees_ans_c_nosnag$treetops_sf)[, 1:2]
-control_xy  <- st_coordinates(controlpoints_proj)[, 1:2]
+control_xy  <- st_coordinates(controlpoints)[, 1:2]
+
+# Nearest neighbor search
+knn_result <- get.knnx(data = treetops_xy, query = control_xy, k = 1)
+nearest_ids <- knn_result$nn.index[, 1]
+distances <- knn_result$nn.dist[, 1]
+
+# Height difference filtering
+height_diff <- abs(controlpoints$tree_height_m - cloud2trees_ans_c_nosnag$treetops_sf$tree_height_m[nearest_ids])
+
+# Accept only matches within 5 meters distance and height diff
+valid_match <- which(distances <= 10 & height_diff <= 30)
+
+controlpoints$predicted_dbh_cm <- NA_real_
+controlpoints$tree_height_m <- NA_real_
+
+controlpoints$predicted_dbh_cm[valid_match] <- cloud2trees_ans_c_nosnag$treetops_sf$predicted_dbh_cm[nearest_ids[valid_match]]
+controlpoints$tree_height_m[valid_match]     <- cloud2trees_ans_c_nosnag$treetops_sf$tree_height_m[nearest_ids[valid_match]]
+
+summary(distances)
+summary(height_diff)
+
+# Subset only trees that have both field DBH and predicted DBH
+eval_subset <- subset(cloud2trees_ans_c_nosnag$treetops_sf, !is.na(dbh_cm) & !is.na(predicted_dbh_cm))
+
+# Calculate residuals
+eval_subset$residual_dbh <- eval_subset$dbh_cm - eval_subset$predicted_dbh_cm
+
+# R-squared
+r_squared <- 1 - sum(eval_subset$residual_dbh^2) / sum((eval_subset$dbh_cm - mean(eval_subset$dbh_cm))^2)
+r_squared
+
+
+
+
+
+
 
 
 # Try progressively looser criteria
