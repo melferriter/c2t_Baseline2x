@@ -1,5 +1,82 @@
+## pkgbuild helps us check for Rtools
+install.packages("pkgbuild")
+# check for Rtools which is required to build packages
+pkgbuild::check_build_tools(debug = TRUE)
+## remotes helps us get packages hosted on github
+install.packages("remotes")
+## install lasR from the r-univers
+install.packages("lasR", repos = "https://r-lidar.r-universe.dev")
+## install TreeLS from github
+remotes::install_github(repo = "tiagodc/TreeLS", upgrade = F)
+## get cloud2trees
+remotes::install_github(repo = "georgewoolsey/cloud2trees", upgrade = F)
 
+
+# download the external data
+cloud2trees::get_data()
+# download the TreeMap data
+cloud2trees::get_treemap()
+# download the forest type data
+cloud2trees::get_foresttype()
+# download the landfire cbd data
+cloud2trees::get_landfire()
+
+# Libraries====
+library(lidR)
+library(sf)
+library(terra)
+library(stars)
+library(raster)
+library(alphashape3d)
+library(plyr)
+library(tidyverse)
+library(devtools)
+library(canopyLazR)
+library(spdep)
+library(sp)
+library(geosphere)
+library(rlas)
+library(rgl)
+library(pracma)
+library(spatstat)
+library(terra)
+library(cloud2trees)
+library(tidyverse)
+library(sf)
+library(purrr)
+library(patchwork)
+library(viridis)
+library(dbplyr)
+library(pacman)
+library(minpack.lm)
+library(FNN)
+library(nngeo)
+pacman::p_load(ggplot2, rgeos, propagate, dplyr, ggpubr, gridExtra)
+
+rm(list = ls(globalenv()))
+------------------
+  
+cloud2trees_ans <- cloud2trees::cloud2trees(output_dir = tempdir(), input_las_dir = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/2x/2xBaseline_20241021232243_clip.las")
+
+## Default ITD window size functions====
+itd_tuning_ans <- itd_tuning(input_las_dir = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/2x/2xBaseline_20241021232243_clip.las")
+best_ws <- itd_tuning_ans$ws_fn_list$lin_fn
  
+
+i = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/2x/2xBaseline_20241021232243_clip.las"  
+
+cloud2trees_ans_c <- cloud2trees::cloud2trees(
+  output_dir = tempdir()
+  , input_las_dir = i
+  , dtm_res_m = 0.5
+  , ws = best_ws
+  , estimate_tree_dbh = TRUE
+  , estimate_tree_type = TRUE
+  , estimate_tree_competition = TRUE
+  , estimate_tree_cbh = TRUE
+  , cbh_tree_sample_n = 555
+  , cbh_estimate_missing_cbh = TRUE
+)
 
 cloud2trees_ans_c_nosnag$treetops_sf <- cloud2trees_ans_c$treetops_sf[cloud2trees_ans_c$treetops_sf$crown_area_m2 > 2, ]
 
