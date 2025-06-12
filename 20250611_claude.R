@@ -110,15 +110,20 @@ ggplot(training_data, aes(x = tree_height_m, y = dbh_cm, color = factor(is_sequo
   labs(title = "Separate Piecewise Models for Sequoia and Non-Sequoia") +
   theme_minimal()
 
-# Predict DBH for UAV-derived treetops
+# Step 1: Initial filtering to remove clearly invalid or tiny trees
 cloud2trees_ans_c_nosnag$treetops_sf <- cloud2trees_ans_c_nosnag$treetops_sf %>%
   filter(
-    tree_height_m >= 15,                        # Remove small trees
-    !(tree_height_m > 50 & is_sequoia == 0)     # Remove suspicious tall non-sequoias
+    tree_height_m >= 20,           # Remove very small trees
+    crown_area_m2 >= 20            # Remove tiny crowns (optional but helpful)
   )
 
-#cloud2trees_ans_c_nosnag$treetops_sf <- cloud2trees_ans_c_nosnag$treetops_sf %>%
- # mutate(is_sequoia = ifelse(tree_height_m > 50 & crown_area_m2 > 100, 1, 0))
+# Step 2: Predict is_sequoia using reasonable biological thresholds
+cloud2trees_ans_c_nosnag$treetops_sf <- cloud2trees_ans_c_nosnag$treetops_sf %>%
+  mutate(is_sequoia = ifelse(tree_height_m > 50 & crown_area_m2 > 100, 1, 0))
+
+# Step 3: Filter out biologically implausible non-sequoias
+cloud2trees_ans_c_nosnag$treetops_sf <- cloud2trees_ans_c_nosnag$treetops_sf %>%
+  filter(!(tree_height_m > 50 & is_sequoia == 0))
 
 
 cloud2trees_ans_c_nosnag$treetops_sf <- cloud2trees_ans_c_nosnag$treetops_sf %>%
@@ -171,7 +176,9 @@ ggplot(valid_data, aes(x = observed_dbh_cm, y = predicted_dbh_cm)) +
 
 ------------------------------------------------------------
   
-  
+summary(training_data)
+summary(cloud2trees_ans_c_nosnag$treetops_sf$tree_height_m)
+
 
   
   
