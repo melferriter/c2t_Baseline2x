@@ -123,8 +123,11 @@ ggplot(training_data, aes(x = tree_height_m, y = dbh_cm, color = factor(is_sequo
   geom_point() +
   geom_smooth(data = sequoia_data, method = "lm", formula = y ~ x + I(pmax(x - 50, 0)), se = TRUE, color = "darkgreen") +
   geom_smooth(data = nonsequoia_data, method = "lm", formula = y ~ x + I(pmax(x - 50, 0)), se = TRUE, color = "orange") +
+  geom_point(position = position_jitter(width = 0, height = 2)) +
   labs(title = "Separate Piecewise Models for Sequoia and Non-Sequoia") +
   theme_minimal()
+
+
 
 # Step 1: Initial filtering to remove clearly invalid or tiny trees
 cloud2trees_ans_c_nosnag$treetops_sf <- cloud2trees_ans_c_nosnag$treetops_sf %>%
