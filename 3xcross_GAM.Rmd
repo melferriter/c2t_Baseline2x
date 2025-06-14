@@ -1,0 +1,208 @@
+---
+title: "GAM-Based DBH Estimation and Crown Area Adjustment"
+output: html_document
+date: "2025-06-14"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+
+
+```{r setup}
+i = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/3x/3xCross_20241022194753_clip_clip.las"  
+
+cloud2trees_ans <- cloud2trees::cloud2trees(output_dir = tempdir(), input_las_dir = i)
+
+## Default ITD window size functions====
+itd_tuning_ans <- itd_tuning(input_las_dir = i)
+itd_tuning_ans$plot_samples
+best_ws <- itd_tuning_ans$ws_fn_list$lin_fn
+
+cloud2trees_ans_c <- cloud2trees::cloud2trees(
+  output_dir = tempdir()
+  , input_las_dir = i
+  , dtm_res_m = 0.5
+  , ws = best_ws
+  , estimate_tree_dbh = TRUE
+  , estimate_tree_type = F
+  , estimate_tree_competition = TRUE
+  , estimate_tree_cbh = FALSE
+  , cbh_estimate_missing_cbh = F
+)
+
+cloud2trees_ans_c_nosnag <- cloud2trees_ans_c
+cloud2trees_ans_c_nosnag$treetops_sf <- cloud2trees_ans_c$treetops_sf[cloud2trees_ans_c$treetops_sf$crown_area_m2 > 2, ]
+
+# Filter to get only snags (trees with crown area < 2 m²)
+snags_sf <- cloud2trees_ans_c$crowns_sf[cloud2trees_ans_c$crowns_sf$crown_area_m2 < 2, ]
+
+# Plot only the snags
+ggplot2::ggplot() + 
+  ggplot2::geom_sf(data = snags_sf, mapping = ggplot2::aes(fill = tree_height_m)) + 
+  ggplot2::theme_void() +
+  ggplot2::ggtitle("Snags (Crown Area < 2 m²)") +
+  ggplot2::theme(legend.position = "top", 
+                 legend.direction = "horizontal",
+                 plot.title = ggplot2::element_text(hjust = 0.5))
+```
+
+## 
+
+```{r pressure, echo=FALSE}
+# Load and filter training data
+training_data_raw <- read.csv("C:/Users/User/Desktop/TrainingData_issequoia_2.csv")
+training_data <- training_data_raw %>%
+  filter(
+    tree_height_m >= 15, tree_height_m <= 95,                 # Remove trees shorter than 15 m
+    dbh_cm >= 10, dbh_cm <= 350,         # Remove DBH outliers
+    !(tree_height_m > 50 & is_sequoia == 0)  # Likely Sequoias misclassified as non-sequoia
+  )
+
+# Split data by species
+sequoia_data     <- training_data %>% filter(is_sequoia == 1)
+nonsequoia_data  <- training_data %>% filter(is_sequoia == 0)
+
+head(sequoia_data)
+  
+```
+
+
+```{r}
+ggplot(controlpoints, aes(x = tree_height_m, y = dbh_cm, color = factor(is_sequoia))) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("orange", "forestgreen"), labels = c("Non-Sequoia", "Sequoia")) +
+  labs(title = "Control Points: Sequoia vs Non-Sequoia", color = "Type") +
+  theme_minimal()
+```
+
+
+```{r}
+ggplot(training_data %>% filter(is_sequoia == 1), aes(x = tree_height_m)) +
+  geom_histogram(binwidth = 5, fill = "darkgreen", color = "white") +
+  labs(title = "Sequoia Tree Height Distribution",
+       x = "Tree Height (m)",
+       y = "Count") +
+  theme_minimal()
+```
+
+```{r}
+ggplot(training_data %>% filter(is_sequoia == 1), aes(x = dbh_cm)) +
+  geom_histogram(binwidth = 5, fill = "darkgreen", color = "white") +
+  labs(title = "Sequoia Tree Height Distribution",
+       x = "Tree Height (m)",
+       y = "Count") +
+  theme_minimal()
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+```{r}
+model_gam_seq    <- gam(dbh_cm ~ s(tree_height_m), data = sequoia_data, method = "REML")
+model_gam_nonseq <- gam(dbh_cm ~ s(tree_height_m), data = nonsequoia_data, method = "REML")
+
+model_gam_seq
+```
+
+```{r}
+cloud2trees_ans_c_nosnag$treetops_sf <- cloud2trees_ans_c_nosnag$treetops_sf %>%
+  mutate(predicted_dbh_cm = ifelse(
+    is_sequoia == 1,
+    predict(model_gam_seq, newdata = .),
+    predict(model_gam_nonseq, newdata = .)
+  ))
+
+cloud2trees_ans_c_nosnag$treetops_sf[2]
+```
+
+```{r}
+treetops_xy <- st_coordinates(cloud2trees_ans_c_nosnag$treetops_sf)[, 1:2]
+control_xy  <- st_coordinates(controlpoints)[, 1:2]
+knn_result <- get.knnx(data = treetops_xy, query = control_xy, k = 1)
+nearest_ids <- knn_result$nn.index[, 1]
+distances   <- knn_result$nn.dist[, 1]
+height_diff <- abs(controlpoints$tree_height_m - cloud2trees_ans_c_nosnag$treetops_sf$tree_height_m[nearest_ids])
+valid_match <- which(distances <= 10 & height_diff <= 30)
+
+valid_match
+```
+
+```{r}
+matched_data <- data.frame(
+  observed_dbh_cm   = controlpoints$dbh_cm[valid_match],
+  predicted_dbh_cm  = cloud2trees_ans_c_nosnag$treetops_sf$predicted_dbh_cm[nearest_ids[valid_match]],
+  crown_area_m2     = cloud2trees_ans_c_nosnag$treetops_sf$crown_area_m2[nearest_ids[valid_match]],
+  is_sequoia        = cloud2trees_ans_c_nosnag$treetops_sf$is_sequoia[nearest_ids[valid_match]]
+)
+
+matched_data$residual_dbh <- matched_data$observed_dbh_cm - matched_data$predicted_dbh_cm
+```
+
+
+```{r}
+resid_model <- lm(residual_dbh ~ crown_area_m2, data = matched_data)
+
+cloud2trees_ans_c_nosnag$treetops_sf <- cloud2trees_ans_c_nosnag$treetops_sf %>%
+  mutate(predicted_dbh_cm_adjusted = predicted_dbh_cm + predict(resid_model, newdata = .))
+```
+
+```{r}
+matched_data$predicted_dbh_cm_adjusted <- cloud2trees_ans_c_nosnag$treetops_sf$predicted_dbh_cm_adjusted[nearest_ids[valid_match]]
+matched_data$residual_adjusted <- matched_data$observed_dbh_cm - matched_data$predicted_dbh_cm_adjusted
+```
+
+```{r}
+
+```
+
+
+```{r}
+evaluate_accuracy <- function(data, label) {
+  rmse <- sqrt(mean((data$observed_dbh_cm - data$predicted_dbh_cm_adjusted)^2))
+  bias <- mean(data$predicted_dbh_cm_adjusted - data$observed_dbh_cm)
+  r2 <- 1 - sum((data$observed_dbh_cm - data$predicted_dbh_cm_adjusted)^2) /
+    sum((data$observed_dbh_cm - mean(data$observed_dbh_cm))^2)
+
+  cat(paste0("\n", label, " Accuracy:\n"))
+  cat("  RMSE:", round(rmse, 2), "cm\n")
+  cat("  Bias:", round(bias, 2), "cm\n")
+  cat("  R²:", round(r2, 3), "\n")
+}
+
+matched_seq     <- matched_data %>% filter(is_sequoia == 1)
+matched_nonseq  <- matched_data %>% filter(is_sequoia == 0)
+
+evaluate_accuracy(matched_seq, "Sequoia")
+evaluate_accuracy(matched_nonseq, "Non-Sequoia")
+```
+
+
+```{r}
+ggplot(matched_data, aes(x = observed_dbh_cm, y = predicted_dbh_cm_adjusted, color = factor(is_sequoia))) +
+  geom_point(alpha = 0.6, size = 3) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(
+    title = "Observed vs Adjusted Predicted DBH",
+    x = "Observed DBH (cm)",
+    y = "Adjusted Predicted DBH (cm)",
+    color = "Sequoia?"
+  ) +
+  scale_color_manual(values = c("0" = "blue", "1" = "darkgreen"),
+                     labels = c("Non-Sequoia", "Sequoia")) +
+  theme_minimal()
+```
+
+
+
+
+
+
+
+
+
+
+
+
