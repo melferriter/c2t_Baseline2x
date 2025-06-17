@@ -194,15 +194,25 @@ matched_data <- controlpoints %>%
   mutate(
     predicted_dbh_cm = cloud2trees_ans_c$treetops_sf$predicted_dbh_cm[control_id],
     residual_dbh = dbh_cm - predicted_dbh_cm,
-    crown_area_m2 = cloud2trees_ans_c$treetops_sf$crown_area_m2[control_id]
+    crown_area_m2 = cloud2trees_ans_c$treetops_sf$crown_area_m2[control_id],
+    comp_dist_to_nearest_m = cloud2trees_ans_c$treetops_sf$comp_dist_to_nearest_m[control_id],
+    slope_deg = cloud2trees_ans_c$treetops_sf$slope_deg[control_id]
   )
 
 --------------
 matched_data$residual_dbh <- matched_data$dbh_cm - matched_data$predicted_dbh_cm
-resid_model <- lm(residual_dbh ~ crown_area_m2, data = matched_data)
+#resid_model <- lm(residual_dbh ~ crown_area_m2, data = matched_data)
+resid_model <- lm(residual_dbh ~ crown_area_m2 + slope_deg, data = matched_data)
+#resid_model <- lm(residual_dbh ~ crown_area_m2 * nearest_tree_dist_m, data = matched_data)
+#resid_gam <- gam(residual_dbh ~ s(crown_area_m2) + s(comp_dist_to_nearest_m), data = matched_data, method = "REML")
+
+
+
 
 cloud2trees_ans_c$treetops_sf <- cloud2trees_ans_c$treetops_sf %>%
   mutate(predicted_dbh_cm_adjusted = predicted_dbh_cm + predict(resid_model, newdata = .))
+#cloud2trees_ans_c$treetops_sf <- cloud2trees_ans_c$treetops_sf %>%
+#  mutate(predicted_dbh_cm_adjusted = predicted_dbh_cm + predict(resid_gam, newdata = .))
 
 matched_data$predicted_dbh_cm_adjusted <- cloud2trees_ans_c$treetops_sf$predicted_dbh_cm_adjusted[control_id]
 
@@ -213,10 +223,10 @@ bias <- mean(matched_data$predicted_dbh_cm_adjusted - matched_data$dbh_cm)
 r2 <- 1 - sum((matched_data$dbh_cm - matched_data$predicted_dbh_cm_adjusted)^2) / 
   sum((matched_data$dbh_cm - mean(matched_data$dbh_cm))^2)
 
-cat("Adjusted DBH Prediction:\n")
-cat("  RMSE:", round(rmse, 2), "cm\n")
-cat("  Bias:", round(bias, 2), "cm\n")
-cat("  R²:", round(r2, 3), "\n")
+cat("Adjusted DBH Prediction:/n")
+cat("  RMSE:", round(rmse, 2), "cm/n")
+cat("  Bias:", round(bias, 2), "cm/n")
+cat("  R²:", round(r2, 3), "/n")
 
 ggplot(matched_data, aes(x = dbh_cm, y = predicted_dbh_cm_adjusted)) +
   geom_point(alpha = 0.6) +
@@ -243,10 +253,10 @@ evaluate_accuracy <- function(matched_data, label = "") {
   r2 <- 1 - sum((matched_data$dbh_cm - matched_data$predicted_dbh_cm_adjusted)^2, na.rm = TRUE) /
     sum((matched_data$dbh_cm - mean(matched_data$dbh_cm))^2, na.rm = TRUE)
   
-  cat("\n", label, "Accuracy Metrics:\n")
-  cat("  RMSE:", round(rmse, 2), "cm\n")
-  cat("  Bias:", round(bias, 2), "cm\n")
-  cat("  R²:", round(r2, 3), "\n")
+  cat("/n", label, "Accuracy Metrics:/n")
+  cat("  RMSE:", round(rmse, 2), "cm/n")
+  cat("  Bias:", round(bias, 2), "cm/n")
+  cat("  R²:", round(r2, 3), "/n")
   
   return(invisible(data.frame(RMSE = rmse, Bias = bias, R2 = r2)))
 }
@@ -272,9 +282,30 @@ ggplot(matched_data, aes(x = dbh_cm, y = predicted_dbh_cm_adjusted, color = fact
   scale_color_manual(values = c("0" = "blue", "1" = "darkgreen"), labels = c("Non-Sequoia", "Sequoia")) +
   theme_minimal()
 
-  
+plot(resid_gam, pages = 1, residuals = TRUE)
+
   
 ----------------------
 
-  
+# 1. Load your DEM (must be aligned and in the same CRS as your crown polygons)
+dem <- rast("E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/3x/DEMs/3xCross_20241022194753_DSM.tif")  # Replace with your DEM path
+
+
+# 2. Calculate slope in degrees
+slope_raster <- terrain(dem, v = "slope", unit = "degrees")
+
+# 3. Extract mean slope for each crown polygon
+# Assume crowns_sf is in cloud2trees_ans_c$crowns_sf and is an sf POLYGON
+crowns_sf <- cloud2trees_ans_c$crowns_sf
+crowns_spat <- vect(crowns_sf)  # convert sf to terra-compatible SpatVector
+
+# Extract mean slope per polygon
+mean_slope_df <- terra::extract(slope_raster, cloud2trees_ans_c$treetops_sf, fun = mean, na.rm = TRUE)
+# This returns a dataframe with ID and mean slope
+
+# 4. Add the mean slope to the original crowns data
+cloud2trees_ans_c$treetops_sf$slope_deg <- mean_slope_df$slope
+
+
+
   
