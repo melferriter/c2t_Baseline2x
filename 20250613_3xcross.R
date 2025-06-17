@@ -80,15 +80,15 @@ cloud2trees_ans_c <- cloud2trees::cloud2trees(
   , cbh_estimate_missing_cbh = F
 )
 
-cloud2trees_ans_c_nosnag <- cloud2trees_ans_c
-cloud2trees_ans_c_nosnag$treetops_sf <- cloud2trees_ans_c$treetops_sf[cloud2trees_ans_c$treetops_sf$crown_area_m2 > 30, ]
+#cloud2trees_ans_c_nosnag <- cloud2trees_ans_c
+#cloud2trees_ans_c_nosnag$treetops_sf <- cloud2trees_ans_c$treetops_sf[cloud2trees_ans_c$treetops_sf$crown_area_m2 > 30, ]
 
 # Step 2: Predict is_sequoia using reasonable biological thresholds
 cloud2trees_ans_c$treetops_sf <- cloud2trees_ans_c$treetops_sf %>%
   mutate(is_sequoia = ifelse(crown_area_m2 > 115, 1, 0))
 
 
-cloud2trees_ans_c$treetops_sf[2]
+#cloud2trees_ans_c$treetops_sf[2]
 
 ggplot(cloud2trees_ans_c$treetops_sf %>% filter(is_sequoia == 1), aes(x = dbh_cm)) +
   geom_histogram(binwidth = 5, fill = "darkgreen", color = "white") +
@@ -98,13 +98,13 @@ ggplot(cloud2trees_ans_c$treetops_sf %>% filter(is_sequoia == 1), aes(x = dbh_cm
   theme_minimal()
 
 # Extract coordinates and combine with attribute data
-treetops_df <- cloud2trees_ans_c$treetops_sf %>%
-  mutate(X = st_coordinates(.)[, 1],
-         Y = st_coordinates(.)[, 2]) %>%
-  st_drop_geometry()  # Remove geometry column for CSV export
+#treetops_df <- cloud2trees_ans_c$treetops_sf %>%
+#  mutate(X = st_coordinates(.)[, 1],
+#         Y = st_coordinates(.)[, 2]) %>%
+#  st_drop_geometry()  # Remove geometry column for CSV export
 
 # Export to CSV
-write.csv(treetops_df, "C:/Users/User/Desktop/treetops_export.csv", row.names = FALSE)
+#write.csv(treetops_df, "C:/Users/User/Desktop/treetops_export.csv", row.names = FALSE)
 
 --------------------------
   
@@ -164,6 +164,7 @@ nonseq_controlid <- nonseq_control$c2t_id
 mean(seq_control$dbh_cm)
 ---------------
 #GAM 
+
   
 # Step 2: Fit GAMs separately for each group
 model_gam_sequoia    <- gam(dbh_cm ~ s(tree_height_m), data = sequoia_data, method = "REML")
@@ -192,8 +193,43 @@ control_id <- controlpoints$c2t_id
 matched_data <- controlpoints %>%
   mutate(
     predicted_dbh_cm = cloud2trees_ans_c$treetops_sf$predicted_dbh_cm[control_id],
-    residual_dbh = dbh_cm - predicted_dbh_cm
+    residual_dbh = dbh_cm - predicted_dbh_cm,
+    crown_area_m2 = cloud2trees_ans_c$treetops_sf$crown_area_m2[control_id]
   )
+
+--------------
+matched_data$residual_dbh <- matched_data$dbh_cm - matched_data$predicted_dbh_cm
+resid_model <- lm(residual_dbh ~ crown_area_m2, data = matched_data)
+
+cloud2trees_ans_c$treetops_sf <- cloud2trees_ans_c$treetops_sf %>%
+  mutate(predicted_dbh_cm_adjusted = predicted_dbh_cm + predict(resid_model, newdata = .))
+
+matched_data$predicted_dbh_cm_adjusted <- cloud2trees_ans_c$treetops_sf$predicted_dbh_cm_adjusted[control_id]
+
+matched_data$residual_adjusted <- matched_data$dbh_cm - matched_data$predicted_dbh_cm_adjusted
+
+rmse <- sqrt(mean(matched_data$residual_adjusted^2))
+bias <- mean(matched_data$predicted_dbh_cm_adjusted - matched_data$dbh_cm)
+r2 <- 1 - sum((matched_data$dbh_cm - matched_data$predicted_dbh_cm_adjusted)^2) / 
+  sum((matched_data$dbh_cm - mean(matched_data$dbh_cm))^2)
+
+cat("Adjusted DBH Prediction:\n")
+cat("  RMSE:", round(rmse, 2), "cm\n")
+cat("  Bias:", round(bias, 2), "cm\n")
+cat("  R²:", round(r2, 3), "\n")
+
+ggplot(matched_data, aes(x = dbh_cm, y = predicted_dbh_cm_adjusted)) +
+  geom_point(alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(
+    title = "Observed vs Adjusted Predicted DBH",
+    x = "Observed DBH (cm)",
+    y = "Adjusted Predicted DBH (cm)"
+  ) +
+  theme_minimal()
+
+
+--------------
 
 controlpoints %>% cloud2trees_ans_c$treetops_sf[controlpoints$c2t_id]
 cloud2trees_ans_c$treetops_sf[treeID=="714_364362.4_4000854.6"]
@@ -202,9 +238,9 @@ cloud2trees_ans_c$treetops_sf[744,]
 
 # Accuracy function
 evaluate_accuracy <- function(matched_data, label = "") {
-  rmse <- sqrt(mean(matched_data$residual_dbh^2, na.rm = TRUE))
-  bias <- mean(matched_data$residual_dbh, na.rm = TRUE)
-  r2 <- 1 - sum((matched_data$dbh_cm - matched_data$predicted_dbh_cm)^2, na.rm = TRUE) /
+  rmse <- sqrt(mean(matched_data$residual_adjusted^2, na.rm = TRUE))
+  bias <- mean(matched_data$residual_adjusted, na.rm = TRUE)
+  r2 <- 1 - sum((matched_data$dbh_cm - matched_data$predicted_dbh_cm_adjusted)^2, na.rm = TRUE) /
     sum((matched_data$dbh_cm - mean(matched_data$dbh_cm))^2, na.rm = TRUE)
   
   cat("\n", label, "Accuracy Metrics:\n")
@@ -218,12 +254,13 @@ evaluate_accuracy <- function(matched_data, label = "") {
 # Evaluate overall accuracy
 evaluate_accuracy(matched_data, "All Trees")
 
+
 # Evaluate separately for Sequoia vs Non-Sequoia
 evaluate_accuracy(filter(matched_data, is_sequoia == 1), "Sequoia")
 evaluate_accuracy(filter(matched_data, is_sequoia == 0), "Non-Sequoia")
 
 
-ggplot(matched_data, aes(x = dbh_cm, y = predicted_dbh_cm, color = factor(is_sequoia))) +
+ggplot(matched_data, aes(x = dbh_cm, y = predicted_dbh_cm_adjusted, color = factor(is_sequoia))) +
   geom_point(alpha = 0.6) +
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
   labs(
