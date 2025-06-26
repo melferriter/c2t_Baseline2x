@@ -139,9 +139,12 @@ training_data <- training_data %>% drop_na()
 
 ggplot(training_data, aes(x = tree_height_m, y = dbh_cm, color = factor(is_sequoia==1))) +
   geom_point(size = 3) +
-  scale_color_manual(values = c("forestgreen", "orange"), labels = c("Sequoia", "Not Sequoia")) +
-  labs(title = "Training Data: Sequoia vs Non-Sequoia", color = "Type") +
-  theme_minimal()
+  scale_color_manual(values = c("orange", "forestgreen"), labels = c("Non-Sequoia", "Sequoia")) +
+  labs(title = "Training Data: Sequoia vs Non-Sequoia Trees", color = "Type",
+       x = "Tree Height (m)",
+       y = "Tree Diameter at Breast Height (cm)") +
+  theme_minimal() +
+  theme(text=element_text(size=14))
 
 # Split data by species
 sequoia_data     <- training_data %>% filter(is_sequoia == 1)
@@ -337,10 +340,14 @@ plot(resid_gam, pages = 1, residuals = TRUE)
 
 # 1. Load your DEM (must be aligned and in the same CRS as your crown polygons)
 dem <- rast("E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/3x/DEMs/3xCross_20241022194753_DSM.tif")  # Replace with your DEM path
-
+plot(dem)
 # 2. Calculate slope in degrees
+aspect_raster <- terrain(dem, v = "aspect", unit = "degrees")
 slope_raster <- terrain(dem, v = "slope", unit = "degrees")
-
+flowdir_raster <- terrain(dem, v = "flowdir", unit = "degrees")
+plot(aspect_raster)
+plot(slope_raster)
+plot(flowdir_raster)
 # 3. Extract mean slope for each crown polygon
 # Assume crowns_sf is in cloud2trees_ans_c$crowns_sf and is an sf POLYGON
 crowns_sf <- cloud2trees_ans_c$crowns_sf
@@ -353,7 +360,9 @@ mean_slope_df <- terra::extract(slope_raster, cloud2trees_ans_c$treetops_sf, fun
 # 4. Add the mean slope to the original crowns data
 cloud2trees_ans_c$treetops_sf$slope_deg <- mean_slope_df$slope
 
-
+# slope, aspect, elevation, flow direction, multispectral bands, NDVI, 
+# CHM, Crown polygons, tree height, canopy area, point density, max crown diameter height
+# CBH, sequoia vs non sequoia, basal area 
 --------------
 
   
