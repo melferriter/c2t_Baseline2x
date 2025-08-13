@@ -65,8 +65,8 @@ gc()
 graphics.off() 
 ------------------------------------
   
-  #read in the SFM and 3XCross Las files and clip to ROI
-  roi <- st_read("C:/Users/User/Desktop/LidarClip/LidarExtent.shp", crs = 32611)
+#read in the SFM and 3XCross Las files and clip to ROI
+roi <- st_read("C:/Users/User/Desktop/LidarClip/LidarExtent.shp", crs = 32611)
 roi_2d <- st_zm(roi, drop = TRUE, what = "ZM")
 Las3x <- readLAS("E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/3x/3xCross_20241022194753_clip_clip.las", filter = "-set_withheld_flag 0")
 sfm <- readLAS("E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Raw/20241022/Sam/FreemanCreekGrove_south_group1_densified_point_cloud.las")
@@ -148,8 +148,8 @@ summary(las_combined)
 
 writeLAS(las_combined, "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/3x/SFM_3xCross_20241022194753_20250809.las")
 ------------------------------------
-  
-  i = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/3x/SFM_3xCross_20241022194753_20250809.las" 
+
+i = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/3x/SFM_3xCross_20241022194753_20250809.las" 
 
 cloud2trees_ans <- cloud2trees::cloud2trees(output_dir = tempdir(), input_las_dir = i)
 
@@ -181,8 +181,8 @@ paste(
 
 ------------------------------------
   
-  # Convert LAS object to a dataframe
-  lidar_df <- as.data.frame(las_combined@data)  # Extract X, Y, Z coordinates
+# Convert LAS object to a dataframe
+lidar_df <- as.data.frame(las_combined@data)  # Extract X, Y, Z coordinates
 
 # Convert to an sf object (ensure same CRS as tree crowns)
 lidar_sf <- st_as_sf(lidar_df, coords = c("X", "Y"), crs = st_crs(cloud2trees_ans_c$crowns_sf))
@@ -243,7 +243,7 @@ filtered_crowns <- filtered_crowns %>%
   # Model DBH: Random Forest
   ----------------------------------------
   
-  "C:/Users/User/Desktop/RandomForest/20250806_RandomForest_Variables.csv"
+"C:/Users/User/Desktop/RandomForest/20250806_RandomForest_Variables.csv"
 
 RF_variables <- read.csv("C:/Users/User/Desktop/RandomForest/20250806_RandomForest_Variables.csv")  # or use sf::st_read if spatial
 
@@ -286,10 +286,10 @@ boxplot(RF_variables$tree_height_m_1)
 
 
 --------------------
-  # Seperate RF models for sequoia vs non sequoia
+# Seperate RF models for sequoia vs non sequoia
   
-  # Sequoia trees
-  sequoia_data <- RF_variables[RF_variables$is_sequoia == 1 & !is.na(RF_variables$dbh_cm), ]
+# Sequoia trees
+sequoia_data <- RF_variables[RF_variables$is_sequoia == 1 & !is.na(RF_variables$dbh_cm), ]
 
 # Non-Sequoia trees
 non_sequoia_data <- RF_variables[RF_variables$is_sequoia == 0 & !is.na(RF_variables$dbh_cm), ]
