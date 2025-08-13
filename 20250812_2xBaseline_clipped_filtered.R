@@ -172,3 +172,56 @@ print(p_c_all); print(p_c_filt); print(p_t_all); print(p_t_filt)
 # ggsave(file.path(out_dir, "crowns_density_filtered.png"), p_c_filt, width=6.5, height=5, dpi=300)
 # ggsave(file.path(out_dir, "treetops_density_all.png"), p_t_all, width=6.5, height=5, dpi=300)
 # ggsave(file.path(out_dir, "treetops_density_filtered.png"), p_t_filt, width=6.5, height=5, dpi=300)
+
+
+
+# reattach POINT geometry to the filtered treetops (they currently have buffer geometry)
+tops_filtered_pts <- st_set_geometry(
+  density_treetops_filtered,
+  st_geometry(treetops)[match(density_treetops_filtered$treeID, treetops$treeID)]
+)
+
+ggplot() +
+  geom_sf(data = density_crowns_filtered, fill = NA, color = "grey85", size = 0.2) +
+  geom_sf(data = tops_filtered_pts, aes(color = tree_height_m.x),
+          size = 1.8, shape = 16, alpha = 0.95) +
+  scale_color_distiller(palette = "Oranges", direction = 1, name = "tree ht. (m)") +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid = element_blank())
+
+
+#not filtered
+# crowns as polygons
+ggplot() +
+  geom_sf(data = density_crowns, fill = NA, color = "grey70", size = 0.2) +
+  # treetops as points
+  geom_sf(data = treetops, aes(color = tree_height_m),    # or aes(color = point_density) if you have it
+          size = 1.6, shape = 16, alpha = 0.9) +          # small solid points
+  scale_color_distiller(palette = "Oranges", direction = 1, name = "tree ht. (m)") +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid = element_blank())
+
+
+------------------
+# === A) All treetops as points ===
+# (this is just the c2t$treetops_sf, but we can add the density info)
+treetops_all_pts <- treetops %>%
+  left_join(
+    density_treetops %>% 
+      st_drop_geometry() %>%
+      select(treeID, point_density, tree_height_m.x, is_sequoia, sequoia_group),
+    by = "treeID"
+  )
+
+# === B) Filtered treetops as points ===
+# Replace buffer geometry in density_treetops_filtered with original point geometry
+treetops_filtered_pts <- st_set_geometry(
+  density_treetops_filtered %>%
+    st_drop_geometry(),
+  st_geometry(treetops)[match(density_treetops_filtered$treeID, treetops$treeID)]
+)
+
+# === C) Write to GeoPackage for ArcGIS Pro ===
+st_write(treetops_all_pts, out_gpkg, layer = "treetops_all_points", driver = "GPKG", delete_layer = TRUE)
+st_write(treetops_filtered_pts, out_gpkg, layer = "treetops_filtered_points", driver = "GPKG", delete_layer = TRUE)
+
