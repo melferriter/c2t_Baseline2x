@@ -75,6 +75,11 @@ sfm_clipped <- clip_roi(sfm, roi_2d)
 writeLAS(Las3x_clipped, "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/3x/3xCross _roi_20241022194753_20250809.las")
 writeLAS(sfm_clipped, "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/3x/SFM_roi_20241022194753_20250809.las")
 
+
+sfm <- readLAS("E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Raw/20241022/Sam/FreemanCreekGrove_south_group1_densified_point_cloud.las")
+side3x <- readLAS("E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/ROI_Las/Combo/20250825_SFM_3xSide.las", filter = "-set_withheld_flag 0")
+
+
 crs(Las3x_clipped)
 crs(sfm_clipped)
 
@@ -146,10 +151,10 @@ las_combined@header <- header
 plot(las_combined)
 summary(las_combined)
 
-writeLAS(las_combined, "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/3x/SFM_3xCross_20241022194753_20250809.las")
+writeLAS(las_combined, "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/3x/SFM_3xSide_20241022194753_20250809.las")
 ------------------------------------
 
-i = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/3x/SFM_3xCross_20241022194753_20250809.las" 
+i = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/ROI_Las/SFM_3xSide_20241022194753_20250825.las"
 
 cloud2trees_ans <- cloud2trees::cloud2trees(output_dir = tempdir(), input_las_dir = i)
 
@@ -159,15 +164,17 @@ itd_tuning_ans$plot_samples
 best_ws <- itd_tuning_ans$ws_fn_list$lin_fn
 
 
+sequoia_ws_lo = function(x) {(x * 0.023) + 2}
+
 cloud2trees_ans_c <- cloud2trees::cloud2trees(
   output_dir = tempdir()
-  , input_las_dir = i
-  , dtm_res_m = 0.5
-  , ws = best_ws
-  , estimate_tree_dbh = TRUE
+  , input_las_dir = las_path
+  , dtm_res_m = 0.25
+  , ws = sequoia_ws_lo
+  , estimate_tree_dbh = F
   , estimate_tree_type = F
   , estimate_tree_competition = TRUE
-  , estimate_tree_cbh = TRUE
+  , estimate_tree_cbh = T
   , cbh_estimate_missing_cbh = F
 )
 
@@ -241,23 +248,41 @@ filtered_crowns <- filtered_crowns %>%
 
 ----------------------------------------
   # Model DBH: Random Forest
-  ----------------------------------------
+----------------------------------------
   
-"C:/Users/User/Desktop/RandomForest/20250806_RandomForest_Variables.csv"
+crowns_metrics
 
-RF_variables <- read.csv("C:/Users/User/Desktop/RandomForest/20250806_RandomForest_Variables.csv")  # or use sf::st_read if spatial
+# read your CSV
+fieldpoints <- read_csv("C:/Users/User/Desktop/RandomForest2/FieldPointsCombo.csv")
+crowncombo <- read_csv("C:/Users/User/Desktop/combocrowns.csv")
 
-RF_variables <- RF_variables %>%
-  rename(treeID = TREEID)
+# check structure
+glimpse(fieldpoints)
 
-# Drop unused or ID columns (e.g., TREEID, ZONE_CODE, COUNT)
-RF_variables <- subset(RF_filtered, select = -c(treeID, ZONE_CODE, COUNT))
 
-RF_variables <- RF_variables %>%
-  rename(tree_height_m = tree_height_m_1)
+library(dplyr)
+library(stringr)
+
+# Clean SFM column
+fieldpoints_clean <- fieldpoints %>%
+  mutate(SFM = str_trim(SFM),       # remove spaces
+         SFM = str_replace_all(SFM, "[\r\n]", ""))  # remove carriage returns / newlines
+
+
+# Now do the join
+matched <- crowncombo %>%
+  inner_join(SFM, by = "treeID")
+
+
+crowns$treeID <- as.numeric(crowns_metrics$treeID)
+fieldpoints$SFM <- as.numeric(fieldpoints$SFM)
+----------------------------------------
+  # Model DBH: Random Forest
+----------------------------------------
+
 
 # Check for missing values
-summary(RF_variables)
+summary(crowns_metrics)
 
 # Fit the model to predict DBH
 set.seed(123)
@@ -328,13 +353,3 @@ summary(sequoia_data$dbh_cm)
 
 nrow(nonsequoia_data)
 summary(nonsequoia_data$dbh_cm)
-
------------------------------------------
-  
-  
-  
-  
-  
-  
-  
-  
