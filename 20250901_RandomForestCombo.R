@@ -13,7 +13,7 @@ library(tibble)
 library(stringr)
 library(randomForest)
 library(caret)
-
+rm(list = ls(globalenv()))
 # =========================
 # 1. Load Data
 # =========================
@@ -92,15 +92,8 @@ metrics_list <- map_dfr(1:nrow(crowns), function(i) {
 # =========================
 # 5. Join back to crowns and save
 # =========================
-summary(crowns)
 crowns_metrics <- crowns %>%
   left_join(metrics_list, by = "treeID")
-
-st_write(crowns_metrics, 
-         "C:/Users/User/Desktop/RandomForest3/filtered_crowns_with_all_metrics.gpkg",
-         delete_layer = TRUE)
---------------
-crowns_metrics
 
 # --- Read and clean fieldpoints ---
 fieldpoints <- read_csv("C:/Users/User/Desktop/RandomForest3/fieldpoints_sfmcombo_1.csv")
@@ -119,234 +112,53 @@ fieldpoints_clean <- fieldpoints %>%
 crowns_metrics$treeID <- as.character(crowns_metrics$treeID)
 fieldpoints_clean$treeID <- as.character(fieldpoints_clean$treeID)
 
+
 # Now join: keep only useful columns from fieldpoints
-crowns_joined <- crowns_metrics %>%
+crowns_final <- crowns_metrics %>%
   left_join(
     fieldpoints_clean %>%
       dplyr::select(treeID, dbh_cm, treecbh, treeheight),
     by = "treeID"
   )
 
-summary(fieldpoints)
 
-# Remove rows where dbh_cm is NA
-crowns_final <- crowns_joined %>%
-  filter(!is.na(dbh_cm.y))
+# ----------------------------------------
+# Model DBH: Random Forest
+# ----------------------------------------
 
-# Add log(DBH) safely
-crowns_final <- crowns_final %>%
-  mutate(log_dbh = ifelse(dbh_cm.y > 0, log(dbh_cm.y), NA_real_)) %>%
-  filter(!is.na(log_dbh))   # remove invalid rows
-
-
-# Save back out
-st_write(crowns_final, "C:/Users/User/Desktop/RandomForest3/fieldpoints_sfmcombo_1.csv",
-         delete_layer = TRUE)
-
-----------------------------------------
-  # Model DBH: Random Forest
-----------------------------------------
-
-crowns_final <- crowns_final %>%
-  filter(dbh_cm.y > 0, dbh_cm.y < 350)
-  
-# Check for missing values
+# ============================
+# 1. Prepare Data
+# ============================
 summary(crowns_final)
 
-# Fit the model to predict DBH
-set.seed(123)
+crowns_final %>%
+  filter(dbh_cm.y == 0 | treecbh == 0) %>%
+  select(treeID, dbh_cm.y, treecbh, treeheight)
 
-rf_model <- randomForest(
-  log_dbh ~ tree_height_m + is_sequoia + crown_area_m2 +
-     p95.x + p75.x + p50.x + p25.x + mean_z.x + max_z.x +
-    sd_z.x + cv_z.x + point_density + slope_mean.x + treecbh + ndvi_mean.x,
-  data = crowns_final,
-  importance = TRUE,
-  ntree = 500
-)
-
-# View results
-print(rf_model)
-varImpPlot(rf_model)
-
-# Predictions (already back-transformed from log to cm)
-crowns_final$log_dbh_pred <- predict(rf_model, newdata = crowns_final)
-crowns_final$dbh_pred_cm  <- exp(crowns_final$log_dbh_pred)
-
-# Define observed and predicted
-obs  <- crowns_final$dbh_cm.y        # observed DBH
-pred <- crowns_final$dbh_pred_cm   # predicted DBH
-
-# Compute metrics
-rmse <- sqrt(mean((obs - pred)^2, na.rm = TRUE))
-bias <- mean(pred - obs, na.rm = TRUE)
-r2   <- cor(obs, pred, use = "complete.obs")^2
-
-# Put results into a nice tibble
-results <- tibble(
-  R2   = round(r2, 3),
-  RMSE = round(rmse, 2),
-  Bias = round(bias, 2),
-  N    = sum(!is.na(obs) & !is.na(pred))
-)
-
-print(results)
-
-# Create a data frame with observed and predicted values
-plot_df <- data.frame(
-  obs  = obs,
-  pred = pred
-)
-
-# Observed vs Predicted
-ggplot(plot_df, aes(x = obs, y = pred)) +
-  geom_point(color = "darkgreen", alpha = 0.7, size = 3) +
-  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
-  labs(
-    x = "Observed DBH (cm)",
-    y = "Predicted DBH (cm)",
-    title = "Observed vs Predicted DBH"
-  ) +
-  theme_minimal(base_size = 14)
-
-# Residuals vs Predicted
-ggplot(results, aes(x = pred, y = residuals)) +
-  geom_point(alpha = 0.6, color = "blue") +
-  geom_hline(yintercept = 0, linetype = "dashed") +
-  labs(x = "Predicted DBH (cm)", y = "Residuals (cm)",
-       title = "Residuals vs Predicted DBH") +
-  theme_minimal()
-
-
-----
-  
-# ============================
-# Libraries
-# ============================
-
-set.seed(123)  # reproducibility
-
-# ============================
-# 1. Prepare Data
-# ============================
 crown_data <- crowns_final %>%
-  filter(!is.na(dbh_cm) & dbh_cm > 0) %>%
-  mutate(log_dbh = log(dbh_cm))  # log-transform DBH for modeling
-
-# ============================
-# 2. CV Setup
-# ============================
-ctrl <- trainControl(
-  method = "cv",
-  number = 5,
-  savePredictions = "final"   # ✅ stores fold-wise predictions
-)
-
-# ============================
-# 3. Fit Random Forest with 5-Fold CV
-# ============================
-rf_cv <- train(
-  log_dbh ~ tree_height_m + is_sequoia + crown_area_m2 +
-     p95 + p75 + p50 + p25 + mean_z + max_z +
-    sd_z + cv_z + point_density.x + slope_mean + treecbh + ndvi_mean,
-  data = crown_data,
-  method = "rf",
-  trControl = ctrl,
-  tuneLength = 5,     # try multiple mtry values
-  importance = TRUE,
-  ntree = 500
-)
-
-print(rf_cv)
-varImp(rf_cv)   # variable importance
-
-# ============================
-# 4. Extract Out-of-Sample Predictions
-# ============================
-preds_log <- rf_cv$pred$pred   # CV predictions on log scale
-obs_log   <- rf_cv$pred$obs
-
-# Back-transform to cm
-preds_dbh <- exp(preds_log)
-obs_dbh   <- exp(obs_log)
-
-# ============================
-# 5. Compute Metrics
-# ============================
-r2   <- cor(preds_dbh, obs_dbh, use = "complete.obs")^2
-rmse <- sqrt(mean((preds_dbh - obs_dbh)^2, na.rm = TRUE))
-bias <- mean(preds_dbh - obs_dbh, na.rm = TRUE)
-
-results <- tibble(R2 = r2, RMSE = rmse, Bias = bias, N = length(obs_dbh))
-print(results)
-
-# ============================
-# 6. Plots
-# ============================
-
-# Observed vs Predicted
-plot_df <- tibble(obs = obs_dbh, pred = preds_dbh)
-
-ggplot(plot_df, aes(x = obs, y = pred)) +
-  geom_point(color = "darkgreen", alpha = 0.7, size = 2) +
-  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
-  labs(x = "Observed DBH (cm)", y = "Predicted DBH (cm)",
-       title = "Observed vs Predicted DBH (5-Fold CV)") +
-  theme_minimal(base_size = 14)
-
-# Residuals vs Predicted
-plot_df <- plot_df %>%
-  mutate(resid = obs - pred)
-
-ggplot(plot_df, aes(x = pred, y = resid)) +
-  geom_point(color = "blue", alpha = 0.6, size = 2) +
-  geom_hline(yintercept = 0, linetype = "dashed") +
-  labs(x = "Predicted DBH (cm)", y = "Residuals (cm)",
-       title = "Residuals vs Predicted DBH (5-Fold CV)") +
-  theme_minimal(base_size = 14)
-
--------------
-  
-  
-  
-crowns_final <- crowns_final %>%
-  filter(dbh_cm.y > 0, dbh_cm.y < 350)
-
-crown_data <- crowns_final
-
-# ============================
-# Libraries
-# ============================
-library(caret)
-library(randomForest)
-library(dplyr)
-library(tibble)
-
-set.seed(123)  # reproducibility
-
-# ============================
-# 1. Prepare Data
-# ============================
-crown_data <- crowns_final %>%
-  filter(!is.na(dbh_cm.y) & dbh_cm.y > 0 & dbh_cm.y < 350) %>%   # remove bad DBH
+  filter(!is.na(dbh_cm.y), dbh_cm.y > 0, dbh_cm.y < 350) %>%   # clean DBH
   mutate(
-    log_dbh       = log(dbh_cm.y),        # log-transform response
-    log_height    = log(tree_height_m),   # log-transform height
-    log_crown_area = log1p(crown_area_m2) # log1p handles zero crown area
+    log_dbh        = log(dbh_cm.y),        # response
+    log_height     = log(treeheight),    # field tree height
+    log_crown_area = log1p(crown_area_m2) # predictor
   )
 
 # ============================
 # 2. Define CV setup
 # ============================
+set.seed(123)  # master seed
 ctrl <- trainControl(
   method = "cv",
   number = 5,
-  savePredictions = "final"   # keeps out-of-fold predictions
+  savePredictions = "final"
 )
 
-# ============================
-# 3. Fit Random Forest Model
-# ============================
+# Ensure same randomization across folds
+seeds <- vector("list", length = 5 + 1)  # 5 folds + final model
+for(i in 1:5) seeds[[i]] <- sample.int(1000, 5)  # one per tuning parameter
+seeds[[6]] <- sample.int(1000, 1)  # final model
+ctrl$seeds <- seeds
+
 rflog_model <- train(
   log_dbh ~ log_height + is_sequoia + log_crown_area +
     p95 + p75 + p50 + p25 + mean_z + max_z +
@@ -354,34 +166,97 @@ rflog_model <- train(
   data = crown_data,
   method = "rf",
   trControl = ctrl,
-  tuneLength = 5,       # tests multiple mtry values
+  tuneLength = 5,
   importance = TRUE,
-  ntree = 500
+  ntree = 1000
 )
 
-# View results
+
 print(rflog_model)
 varImp(rflog_model)
 
+# ============================
+# 4. Back-transform Predictions + Overall Metrics
+# ============================
 
-# Pull CV predictions (log scale)
-preds_log <- rflog_model$pred$pred
-obs_log   <- rflog_model$pred$obs
+# Back-transform predictions and observations from log scale
+preds_dbh <- exp(rflog_model$pred$pred)  # predicted DBH (cm)
+obs_dbh   <- exp(rflog_model$pred$obs)   # observed DBH (cm)
 
-# Back-transform to cm
-preds_dbh <- exp(preds_log)
-obs_dbh   <- exp(obs_log)
+# Filter valid cases
+valid_idx <- which(!is.na(obs_dbh) & !is.na(preds_dbh))
+obs_dbh   <- obs_dbh[valid_idx]
+preds_dbh <- preds_dbh[valid_idx]
 
-# Metrics
-r2   <- cor(preds_dbh, obs_dbh, use = "complete.obs")^2
-rmse <- sqrt(mean((preds_dbh - obs_dbh)^2, na.rm = TRUE))
-bias <- mean(preds_dbh - obs_dbh, na.rm = TRUE)
+# ---- Overall model performance (all folds combined) ----
+r2   <- cor(preds_dbh, obs_dbh, use = "complete.obs")^2   # coefficient of determination
+rmse <- sqrt(mean((preds_dbh - obs_dbh)^2, na.rm = TRUE)) # root mean squared error
+bias <- mean(preds_dbh - obs_dbh, na.rm = TRUE)           # average over/under prediction
 
 results <- tibble(R2 = r2, RMSE = rmse, Bias = bias, N = length(obs_dbh))
 print(results)
 
+# ============================
+# 5. caret’s per-fold metrics (RMSE, R², MAE)
+# ============================
 
-# Observed vs Predicted
+# caret automatically saves metrics per resample (fold)
+cv_results <- rflog_model$resample
+head(cv_results)  
+# Contains: RMSE, Rsquared, MAE, Resample (e.g., Fold1...Fold5)
+
+# Summarise mean ± SD across folds
+cv_summary_caret <- cv_results %>%
+  summarise(
+    R2_mean   = mean(Rsquared, na.rm = TRUE),
+    R2_sd     = sd(Rsquared, na.rm = TRUE),
+    RMSE_mean = mean(RMSE, na.rm = TRUE),
+    RMSE_sd   = sd(RMSE, na.rm = TRUE),
+    MAE_mean  = mean(MAE, na.rm = TRUE),
+    MAE_sd    = sd(MAE, na.rm = TRUE)
+  )
+print(cv_summary_caret)
+
+# ============================
+# 6. Custom per-fold metrics (with Bias added)
+# ============================
+
+# Extract CV predictions with fold IDs
+preds <- rflog_model$pred %>%
+  mutate(
+    obs_dbh  = exp(obs),   # back-transform
+    pred_dbh = exp(pred),
+    resid    = pred_dbh - obs_dbh
+  )
+
+# Compute metrics per fold
+cv_metrics <- preds %>%
+  group_by(Resample) %>%
+  summarise(
+    R2   = cor(obs_dbh, pred_dbh, use = "complete.obs")^2,
+    RMSE = sqrt(mean((pred_dbh - obs_dbh)^2, na.rm = TRUE)),
+    MAE  = mean(abs(pred_dbh - obs_dbh), na.rm = TRUE),
+    Bias = mean(resid, na.rm = TRUE),  # bias isn’t in caret’s output
+    .groups = "drop"
+  )
+print(cv_metrics)
+
+# Summarise mean ± SD across folds (including Bias)
+cv_summary <- cv_metrics %>%
+  summarise(
+    R2_mean   = mean(R2),   R2_sd   = sd(R2),
+    RMSE_mean = mean(RMSE), RMSE_sd = sd(RMSE),
+    MAE_mean  = mean(MAE),  MAE_sd  = sd(MAE),
+    Bias_mean = mean(Bias), Bias_sd = sd(Bias)
+  )
+print(cv_summary)
+
+
+# ============================
+# 5. Diagnostics Plots
+# ============================
+
+# Scatter: observed vs predicted
 ggplot(data.frame(obs = obs_dbh, pred = preds_dbh), aes(x = obs, y = pred)) +
   geom_point(color = "forestgreen", alpha = 0.7) +
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
@@ -389,8 +264,8 @@ ggplot(data.frame(obs = obs_dbh, pred = preds_dbh), aes(x = obs, y = pred)) +
        title = "Observed vs Predicted DBH (5-Fold CV)") +
   theme_minimal(base_size = 14)
 
-# Residuals vs Predicted
-residuals <- preds_dbh - obs_dbh
+# Residuals vs predicted
+residuals <- obs_dbh - preds_dbh
 ggplot(data.frame(pred = preds_dbh, resid = residuals), aes(x = pred, y = resid)) +
   geom_point(color = "blue", alpha = 0.6) +
   geom_hline(yintercept = 0, linetype = "dashed") +
@@ -398,20 +273,16 @@ ggplot(data.frame(pred = preds_dbh, resid = residuals), aes(x = pred, y = resid)
        title = "Residuals vs Predicted DBH (5-Fold CV)") +
   theme_minimal(base_size = 14)
 
-valid_idx <- which(!is.na(obs) & !is.na(preds_dbh))
-obs <- obs[valid_idx]
-preds_dbh <- preds_dbh[valid_idx]
-
-residuals <- obs_dbh - preds_dbh
+# ============================
+# 6. Residual Diagnostics
+# ============================
 diagnostics_df <- crown_data %>%
   slice(valid_idx) %>%
   mutate(
-    obs_dbh = obs_dbh,
-    preds_dbh = preds_dbh,
-    residuals = residuals
+    obs_dbh    = obs_dbh,
+    preds_dbh  = preds_dbh,
+    residuals  = obs_dbh - preds_dbh
   )
-
-
 
 # Example: residuals vs crown area
 ggplot(diagnostics_df, aes(x = log_crown_area, y = residuals)) +
@@ -421,26 +292,124 @@ ggplot(diagnostics_df, aes(x = log_crown_area, y = residuals)) +
        title = "Residuals vs Crown Area") +
   theme_minimal()
 
-
-# Keep only numeric predictors and residuals
+# Correlation of residuals with predictors
 diagnostics_df_num <- diagnostics_df %>%
-  st_drop_geometry() %>%   # ✅ drop geometry so geom column is ignored
-  select(residuals, log_height, log_crown_area, slope_mean.x, ndvi_mean.x) %>%
+  st_drop_geometry() %>%   # remove geometry if still present
+  select(residuals, log_height, log_crown_area, slope_mean, ndvi_mean) %>%
   mutate(across(everything(), as.numeric))
 
-# Now compute correlation matrix
 cor_matrix <- cor(diagnostics_df_num, use = "complete.obs")
-
 print(cor_matrix)
 
 
+-------
+N <- nrow(crown_data)
+print(N)
 
+------------
+# ======================================
+# Compare model accuracy side by side
+# ======================================
 
+# Example summaries (replace with your actual results)
+triple_return <- tibble(
+  Model = "Triple Return Sidelap",
+  R2_mean = 0.89, R2_sd = 0.11,
+  RMSE_mean = 29.8, RMSE_sd = 20.5,
+  MAE_mean = 19.6, MAE_sd = 11.1,
+  Bias_mean = -8.16, Bias_sd = 11.9,
+  N = 51
+)
 
+sfm <- tibble(
+  Model = "SfM",
+  R2_mean = 0.89, R2_sd = 0.15,
+  RMSE_mean = 30.6, RMSE_sd = 21.3,
+  MAE_mean = 21.1, MAE_sd = 12.3,
+  Bias_mean = -9.29, Bias_sd = 17.2,
+  N = 52
+)
 
+fusion <- tibble(
+  Model = "Triple Return + SfM Fusion",
+  R2_mean = 0.84, R2_sd = 0.13,
+  RMSE_mean = 28.0, RMSE_sd = 19.5,
+  MAE_mean = 17.1, MAE_sd = 9.5,
+  Bias_mean = -7.40, Bias_sd = 11.1,
+  N = 50
+)
 
-library(mgcv)
-gam_resid <- gam(residuals ~ s(log_crown_area) + s(log_height), data = diagnostics_df)
-summary(gam_resid)
-plot(gam_resid)
+# Combine all into one comparison table
+model_comparison <- bind_rows(triple_return, sfm, fusion)
+
+# View table
+print(model_comparison)
+
+# ======================================
+# Identify "best" model by metric
+# ======================================
+
+# Highest R²
+best_r2 <- model_comparison %>% arrange(desc(R2_mean)) %>% slice(1)
+
+# Lowest RMSE
+best_rmse <- model_comparison %>% arrange(RMSE_mean) %>% slice(1)
+
+# Lowest MAE
+best_mae <- model_comparison %>% arrange(MAE_mean) %>% slice(1)
+
+# Lowest absolute Bias (closest to 0)
+best_bias <- model_comparison %>% 
+  arrange(abs(Bias_mean)) %>% slice(1)
+
+cat("Best by R²:\n"); print(best_r2)
+cat("Best by RMSE:\n"); print(best_rmse)
+cat("Best by MAE:\n"); print(best_mae)
+cat("Best by Bias:\n"); print(best_bias)
+
+------------
+# ============================
+# Libraries
+# ============================
+library(tidyverse)
+
+# ============================
+# Example data (replace with your actual values)
+# ============================
+model_comparison <- tribble(
+  ~Model, ~R2_mean, ~R2_sd, ~RMSE_mean, ~RMSE_sd, ~MAE_mean, ~MAE_sd, ~Bias_mean, ~Bias_sd, ~N,
+  "Triple Return Sidelap",        0.89, 0.11, 29.8, 20.5, 19.6, 11.1, -8.16, 11.9, 51,
+  "SfM",                          0.89, 0.15, 30.6, 21.3, 21.1, 12.3, -9.29, 17.2, 52,
+  "Triple Return + SfM Fusion",   0.84, 0.13, 28.0, 19.5, 17.1,  9.5, -7.40, 11.1, 50
+)
+
+# ============================
+# Reshape for plotting
+# ============================
+plot_data <- model_comparison %>%
+  select(Model, R2_mean, R2_sd, RMSE_mean, RMSE_sd, MAE_mean, MAE_sd, Bias_mean, Bias_sd) %>%
+  pivot_longer(
+    cols = -Model,
+    names_to = c("Metric", ".value"),
+    names_pattern = "(.*)_(mean|sd)"
+  )
+
+# ============================
+# Plot (example: R², RMSE, MAE, Bias)
+# ============================
+ggplot(plot_data, aes(x = Model, y = mean, fill = Model)) +
+  geom_col(position = position_dodge(), width = 0.7) +
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd),
+                width = 0.2, position = position_dodge(0.7)) +
+  facet_wrap(~Metric, scales = "free_y", ncol = 2) +
+  labs(
+    title = "Model Performance Comparison (5-fold CV)",
+    y = "Metric Value (mean ± SD)",
+    x = NULL
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold")
+  )
 
