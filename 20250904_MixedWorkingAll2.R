@@ -441,9 +441,10 @@ preds_rf_seq <- collect_rf_preds(rf_seq, filter(crown_data, is_sequoia == 1),
 
 
 # ---- Sequoia log–log ----
-seq_data <- crown_data %>%
-  filter(is_sequoia == 1, crown_depth > 0)
 
+seq_data <- crown_data %>% filter(is_sequoia == 1, crown_depth > 0)
+
+# Cross-validated metrics (kept for reporting)
 res_loglog_seq <- summarize_cv_lm(
   seq_data,
   log(dbh_cm) ~ log(lidar_height) + log(crown_area_m2) + log(crown_depth),
@@ -451,17 +452,22 @@ res_loglog_seq <- summarize_cv_lm(
   k = 5, repeats = 10
 )
 
-# Collect predictions from log–log CV
+# Predictions for plotting
+model_loglog_seq <- lm(
+  log(dbh_cm) ~ log(lidar_height) + log(crown_area_m2) + log(crown_depth),
+  data = seq_data
+)
+
 preds_loglog_seq <- seq_data %>%
   mutate(
-    Model = "Log–log (Sequoia-only)",
-    Flight = flight,
     obs_cm = dbh_cm,
-    pred_cm = exp(predict(lm(log(dbh_cm) ~ log(lidar_height) +
-                               log(crown_area_m2) + log(crown_depth),
-                           data = seq_data)))
+    pred_cm = exp(predict(model_loglog_seq, newdata = seq_data)),
+    residual_cm = pred_cm - obs_cm,
+    Model = "Log–log (Sequoia-only)",
+    Flight = flight
   ) %>%
-  dplyr::select(Flight, Model, Species, obs_cm, pred_cm)
+  dplyr::select(Flight, Model, Species, obs_cm, pred_cm, residual_cm)
+
 
 
 # ---- Non-sequoia Random Forest ----
@@ -479,36 +485,86 @@ preds_rf_nonseq <- collect_rf_preds(rf_nonseq, filter(crown_data, is_sequoia == 
 
 
 # ---- Non-sequoia log–log ----
+nonseq_data <- crown_data %>% filter(is_sequoia == 0)
+
+# Cross-validated metrics (kept for reporting)
 res_loglog_nonseq <- summarize_cv_lm(
-  filter(crown_data, is_sequoia == 0),
+  nonseq_data,
   log(dbh_cm) ~ log(lidar_height) + log(crown_area_m2),
   paste(flight, "Non-sequoia log–log"),
   k = 5, repeats = 10
 )
 
-preds_loglog_nonseq <- filter(crown_data, is_sequoia == 0) %>%
-  mutate(
-    Model = "Log–log (Non-sequoia)",
-    Flight = flight,
-    obs_cm = dbh_cm,
-    pred_cm = exp(predict(lm(log(dbh_cm) ~ log(lidar_height) + log(crown_area_m2),
-                             data = .)))
-  ) %>%
-  dplyr::select(Flight, Model, Species, obs_cm, pred_cm)
+# Predictions for plotting
+model_loglog_nonseq <- lm(
+  log(dbh_cm) ~ log(lidar_height) + log(crown_area_m2),
+  data = nonseq_data
+)
 
+preds_loglog_nonseq <- nonseq_data %>%
+  mutate(
+    obs_cm = dbh_cm,
+    pred_cm = exp(predict(model_loglog_nonseq, newdata = nonseq_data)),
+    residual_cm = pred_cm - obs_cm,
+    Model = "Log–log (Non-sequoia)",
+    Flight = flight
+  ) %>%
+  dplyr::select(Flight, Model, Species, obs_cm, pred_cm, residual_cm)
+
+
+  preds_store <- bind_rows(
+    preds_rf_base, preds_mix,
+    preds_rf_seq, preds_loglog_seq,
+    preds_rf_nonseq, preds_loglog_nonseq
+  )
+  
+  # Store them in master list for this flight
+  all_preds_all[[flight]] <- preds_store
+  
+  # Collect metrics
+  all_results[[flight]] <- bind_rows(
+    res_rf_base, mix_results,
+    res_rf_seq, res_rf_nonseq,
+    res_loglog_seq, res_loglog_nonseq
+  )
 }
+
 
 # ============================
 # 5. Final results
 # ============================
 final_results <- bind_rows(all_results)
 print(final_results)
-preds_all <- bind_rows(all_preds_all)
-preds_store <- bind_rows(
-  preds_rf_base, preds_mix,
-  preds_rf_seq, preds_loglog_seq,
-  preds_rf_nonseq, preds_loglog_nonseq
-)
+
+
+# === Assemble predictions once ===
+preds_all <- bind_rows(all_preds_all) %>%
+  filter(is.finite(obs_cm), is.finite(pred_cm)) %>%
+  mutate(
+    residual_cm = pred_cm - obs_cm,
+    # Optional: control facet order
+    Model = factor(
+      Model,
+      levels = c("Mixed-effects (pooled)",
+                 "RF (pooled)",
+                 "RF (Sequoia-only)",
+                 "Log–log (Sequoia-only)",
+                 "RF (Non-sequoia)",
+                 "Log–log (Non-sequoia)")
+    )
+  )
+
+# After you've combined all predictions into preds_all
+# (make sure preds_all has treeID, obs_cm, pred_cm, Species, Model, Flight)
+preds_all_collapsed <- preds_all %>%
+  group_by(Flight, Model, Species, obs_cm) %>%
+  summarise(
+    pred_cm = mean(pred_cm, na.rm = TRUE),
+    residual_cm = mean(residual_cm, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
 
 ---------
 library(dplyr)
@@ -660,6 +716,106 @@ ggsave(
   
   
   
+------------
+# all at once
   
   
+library(ggplot2)
+
+make_scatter_fig <- function(flight_name) {
+  ggplot(preds_all_collapsed %>% filter(Flight == flight_name),
+         aes(x = obs_cm, y = pred_cm, color = Species)) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+    geom_point(alpha = 0.6, size = 2) +
+    coord_equal() +
+    facet_wrap(~ Model, nrow = 2) +
+    labs(
+      x = "Observed DBH (cm)",
+      y = "Predicted DBH (cm)",
+      title = paste0("Predicted vs. Observed DBH — ", flight_name),
+      color = "Species"
+    ) +
+    theme_bw()
+}
+
+make_residual_fig <- function(flight_name) {
+  ggplot(preds_all_collapsed %>% filter(Flight == flight_name),
+         aes(x = pred_cm, y = residual_cm, color = Species)) +
+    geom_hline(yintercept = 0, linetype = "dotted") +
+    geom_point(alpha = 0.6, size = 2) +
+    facet_wrap(~ Model, nrow = 2) +
+    labs(
+      x = "Predicted DBH (cm)",
+      y = "Residual (Pred − Obs, cm)",
+      title = paste0("Residuals vs. Predicted DBH — ", flight_name),
+      color = "Species"
+    ) +
+    theme_bw()
+}
   
+make_scatter_fig("LiDAR", "Mixed-effects (pooled)")
+
+
+
+
+
+make_scatter_fig <- function(flight1, model1, flight2, model2) {
+  df <- preds_all_collapsed %>%
+    filter((Flight == flight1 & Model == model1) |
+             (Flight == flight2 & Model == model2)) %>%
+    mutate(Panel = paste(Flight, Model, sep = " — "))
+  
+  ggplot(df, aes(x = obs_cm, y = pred_cm, color = Species)) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+    geom_point(alpha = 0.6, size = 2) +
+    coord_equal() +
+    facet_wrap(~ Panel, nrow = 1) +
+    labs(
+      x = "Observed DBH (cm)", 
+      y = "Predicted DBH (cm)",
+      title = paste("Predicted vs. Observed DBH:", flight1, "vs", flight2),
+      color = "Species"
+    ) +
+    theme_bw()
+}
+
+
+# Compare LiDAR and Fusion, both Mixed-effects
+make_scatter_fig("LiDAR", "Log–log (Non-sequoia)", 
+                 "LiDAR", "Log–log (Sequoia-only)")
+
+# Compare LiDAR Mixed-effects vs LiDAR RF
+make_scatter_fig("LiDAR", "Mixed-effects (pooled)", 
+                 "LiDAR", "RF (pooled)")
+
+
+
+
+make_residual_fig <- function(flight1, model1, flight2, model2) {
+  df <- preds_all_collapsed %>%
+    filter((Flight == flight1 & Model == model1) |
+             (Flight == flight2 & Model == model2)) %>%
+    mutate(Panel = paste(Flight, Model, sep = " — "))
+  
+  ggplot(df, aes(x = pred_cm, y = residual_cm, color = Species)) +
+    geom_hline(yintercept = 0, linetype = "dotted") +
+    geom_point(alpha = 0.6, size = 2) +
+    facet_wrap(~ Panel, nrow = 1) +
+    labs(
+      x = "Predicted DBH (cm)",
+      y = "Residual (Pred − Obs, cm)",
+      title = paste("Residuals vs. Predicted DBH:", flight1, "vs", flight2),
+      color = "Species"
+    ) +
+    theme_bw()
+}
+
+
+# Compare LiDAR and Fusion residuals, Mixed-effects models
+make_residual_fig("LiDAR", "Mixed-effects (pooled)", 
+                  "LiDAR", "Mixed-effects (pooled)")
+
+# Compare LiDAR RF vs LiDAR Mixed-effects residuals
+make_residual_fig("LiDAR", "RF (pooled)", 
+                  "LiDAR", "Mixed-effects (pooled)")
+
