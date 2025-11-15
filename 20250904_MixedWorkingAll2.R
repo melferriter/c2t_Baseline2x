@@ -47,7 +47,42 @@ ndvi <- rast("C:/Users/User/Desktop/RandomForest2/NDVI.tif")
 # 2. CV setup
 # ============================
 set.seed(444)
-ctrl <- trainControl(method = "cv", number = 5, repeats = 10, savePredictions = "final")
+ctrl <- trainControl(method = "repeatedcv", number = 5, repeats = 10, savePredictions = "final", returnResamp   = "final")
+ 
+# ============================
+# 2b. Helpers for pooled OOS predictions & metrics
+# ============================
+library(yardstick)
+library(dplyr)
+
+pooled_metrics <- function(df, truth = obs_cm, estimate = pred_cm) {
+  metrics <- metric_set(rmse, rsq_trad, mae)
+  out <- metrics(df, truth = {{truth}}, estimate = {{estimate}})
+  pct_rmse <- 100 * rmse_vec(df[[deparse(substitute(truth))]],
+                             df[[deparse(substitute(estimate))]]) /
+              mean(df[[deparse(substitute(truth))]], na.rm = TRUE)
+  list(tbl = out, pct_rmse = pct_rmse)
+}
+
+collect_rf_oos <- function(model, data, label, flight) {
+  best <- model$bestTune
+  model$pred %>%
+    semi_join(best, by = names(best)) %>%
+    transmute(
+      id      = rowIndex,
+      obs_cm  = exp(obs),
+      pred_cm = exp(pred),
+      Species = data$Species[rowIndex],
+      Model   = label,
+      Flight  = flight
+    ) %>%
+    group_by(id, Species, Model, Flight) %>%
+    summarise(
+      obs_cm  = first(obs_cm),
+      pred_cm = mean(pred_cm, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
 
 # ============================
 # 3. Summarizer
@@ -537,6 +572,18 @@ final_results <- bind_rows(all_results)
 print(final_results)
 
 
+
+# Apply trained model to new/larger dataset
+rf_predictions <- predict(rf_base, newdata = crown_data_large)
+
+# Add predictions back into your dataframe
+crown_data_large$pred_dbh_cm <- rf_predictions
+
+# Quick look
+head(crown_data_large[, c("treeID", "pred_dbh_cm")])
+
+
+
 # === Assemble predictions once ===
 preds_all <- bind_rows(all_preds_all) %>%
   filter(is.finite(obs_cm), is.finite(pred_cm)) %>%
@@ -769,7 +816,8 @@ make_scatter_fig <- function(flight1, model1, flight2, model2) {
     geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
     geom_point(alpha = 0.6, size = 2) +
     coord_equal() +
-    facet_wrap(~ Panel, nrow = 1) +
+    #facet_wrap(~ Panel, nrow = 1) +
+    facet_wrap(~ Panel, ncol = 1) +
     labs(
       x = "Observed DBH (cm)", 
       y = "Predicted DBH (cm)",
@@ -781,12 +829,24 @@ make_scatter_fig <- function(flight1, model1, flight2, model2) {
 
 
 # Compare LiDAR and Fusion, both Mixed-effects
-make_scatter_fig("LiDAR", "Log–log (Non-sequoia)", 
-                 "LiDAR", "Log–log (Sequoia-only)")
+make_scatter_fig("Fusion", "Mixed-effects (pooled)",
+                 "Fusion", "RF (Non-sequoia)")
+
+# Compare LiDAR and Fusion, both Mixed-effects
+make_scatter_fig("SfM", "Log–log (Sequoia-only)",
+                 "SfM", "RF (Sequoia-only)")
+
+ggsave(
+  filename = "sfm1.png",  # file name
+  plot = last_plot(),                          # saves the most recent ggplot
+  path = "C:/Users/User/Desktop",      # <-- change to your folder
+  width = 5, height = 5,                       # adjust for paper layout
+  dpi = 1200                                    # high resolution for publication
+) 
 
 # Compare LiDAR Mixed-effects vs LiDAR RF
-make_scatter_fig("LiDAR", "Mixed-effects (pooled)", 
-                 "LiDAR", "RF (pooled)")
+make_scatter_fig("Fusion", "Mixed-effects (pooled)",
+                 "Fusion", "RF (Non-sequoia)")
 
 
 
@@ -800,7 +860,8 @@ make_residual_fig <- function(flight1, model1, flight2, model2) {
   ggplot(df, aes(x = pred_cm, y = residual_cm, color = Species)) +
     geom_hline(yintercept = 0, linetype = "dotted") +
     geom_point(alpha = 0.6, size = 2) +
-    facet_wrap(~ Panel, nrow = 1) +
+    #facet_wrap(~ Panel, nrow = 1) +
+    facet_wrap(~ Panel, ncol = 1) +
     labs(
       x = "Predicted DBH (cm)",
       y = "Residual (Pred − Obs, cm)",
@@ -812,10 +873,18 @@ make_residual_fig <- function(flight1, model1, flight2, model2) {
 
 
 # Compare LiDAR and Fusion residuals, Mixed-effects models
-make_residual_fig("LiDAR", "Mixed-effects (pooled)", 
-                  "LiDAR", "Mixed-effects (pooled)")
+make_residual_fig("Fusion", "Mixed-effects (pooled)",
+                 "Fusion", "RF (Non-sequoia)")
 
 # Compare LiDAR RF vs LiDAR Mixed-effects residuals
 make_residual_fig("LiDAR", "RF (pooled)", 
                   "LiDAR", "Mixed-effects (pooled)")
 
+
+ggsave(
+  filename = "resud.png",  # file name
+  plot = last_plot(),                          # saves the most recent ggplot
+  path = "C:/Users/User/Desktop",      # <-- change to your folder
+  width = 5, height = 5,                       # adjust for paper layout
+  dpi = 1200                                    # high resolution for publication
+) 
