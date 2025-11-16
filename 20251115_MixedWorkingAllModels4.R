@@ -427,6 +427,18 @@ preds_all_collapsed <- preds_all %>%
     .groups = "drop"
   )
 
+# Sequoia-only model
+final_loglog_seq <- lm(
+  log(dbh_cm) ~ log(lidar_height) + log(pmax(crown_area_m2, 0.01)),
+  data = filter(crown_data, is_sequoia == 1)
+)
+
+# Non-sequoia model
+final_loglog_nonseq <- lm(
+  log(dbh_cm) ~ log(lidar_height) + log(pmax(crown_area_m2, 0.01)),
+  data = filter(crown_data, is_sequoia == 0)
+)
+
 # ---- 5.1 Metrics per Flight × Model ----
 metrics_labels <- preds_all_collapsed %>%
   group_by(Flight, Model) %>%
@@ -714,8 +726,7 @@ crowns_full <- crowns_full %>%
 
 
 
-library(ggplot2)
-library(scico)
+
 
 ggplot() +
   geom_sf(
@@ -747,59 +758,300 @@ ggplot() +
     x = NULL,
     y = NULL
   )
-
-
-
-----------
+  
+------------------
   
 
+# =============================
+# 1. Split Sequoias / Non-Sequoias
+# =============================
+sequoia_full <- crowns_full %>% filter(is_sequoia == 1)
+nonseq_full  <- crowns_full %>% filter(is_sequoia == 0)
 
+# =============================
+# 2. Build prediction dataframes
+# =============================
+pred_df_seq <- sequoia_full %>%
+  st_drop_geometry() %>%
+  mutate(
+    log_height = log(lidar_height),
+    log_area   = log(pmax(crown_area_m2, 0.01))
+  )
 
+pred_df_nonseq <- nonseq_full %>%
+  st_drop_geometry() %>%
+  mutate(
+    log_height = log(lidar_height),
+    log_area   = log(pmax(crown_area_m2, 0.01))
+  )
 
+# =============================
+# 3. Predict Sequoias (log–log sequoia)
+# =============================
+preds_seq <- exp(predict(final_loglog_seq, newdata = pred_df_seq))
 
-# --- Calculate slope & aspect (in radians, required for shade()) ---
-slope  <- terrain(dtm_full, v = "slope",  unit = "radians")
-aspect <- terrain(dtm_full, v = "aspect", unit = "radians")
+sequoia_full <- sequoia_full %>%
+  select(-matches("^pred_DBH_cm")) %>%
+  mutate(pred_DBH_cm = preds_seq)
 
-# --- Hillshade (illumination) ---
-hill <- shade(slope, aspect)
+# =============================
+# 4. Predict Non-Sequoias (log–log non-sequoia)
+# =============================
+preds_nonseq <- exp(predict(final_loglog_nonseq, newdata = pred_df_nonseq))
 
-# --- Convert to data frames for ggplot ---
-dtm_df  <- as.data.frame(dtm_full, xy = TRUE)
-hill_df <- as.data.frame(hill,      xy = TRUE)
+nonseq_full <- nonseq_full %>%
+  select(-matches("^pred_DBH_cm")) %>%
+  mutate(pred_DBH_cm = preds_nonseq)
 
-
-# Terrain color palette (forest style)
-terrain_cols <- scico::scico(50, palette = "broc")  # earthy greens/browns
-
+# =============================
+# 5. Combine all crowns back together
+# =============================
+crowns_loglog_all <- bind_rows(sequoia_full, nonseq_full)
 
 ggplot() +
-  # ---- Hillshade on alpha only ----
-  geom_raster(
-    data = hill_df,
-    aes(x = x, y = y, alpha = hillshade),
-    fill = "grey20"
-  ) +
-  scale_alpha(range = c(0.3, 0.9), guide = "none") +
-
-  # ---- Crowns with DBH colors ----
   geom_sf(
-    data = crowns_full,
+    data = crowns_loglog_all,
     aes(fill = pred_DBH_cm),
-    color = "white",
-    size = 0.08
+    color = "grey20",
+    size  = 0.12
   ) +
   scale_fill_scico(
     palette = "vik",
-    name = "Predicted DBH (cm)"
+    name = "Predicted DBH (cm)",
+    na.value = "grey90",
+    limits = c(50, 320)
   ) +
+  theme_bw() +
+  labs(
+    title = "DBH Predictions – Log–Log Model (Sequoia + Non-Sequoia)",
+    subtitle = "Sequoias predicted with Sequoia log–log; others with Non-Sequoia log–log",
+    x = NULL, y = NULL
+  )
 
+
+-------------
+  
+# ============================================================
+# 1. Make RANDOM FOREST FULL-FOOTPRINT MAP
+# ============================================================
+
+map_rf <- ggplot() +
+  geom_sf(
+    data = crowns_full,                     # RF predictions stored in crowns_full
+    aes(fill = pred_DBH_cm),
+    color = "grey15",
+    size  = 0.10
+  ) +
+  scale_fill_scico(
+    palette = "vik",
+    name = "Predicted DBH (cm)",
+    direction = 1,
+    na.value = "grey80",
+    limits = c(50, 300),
+    breaks = seq(50, 300, 50)
+  ) +
   theme_bw() +
   theme(
-    panel.grid.major = element_line(color = "grey85"),
-    panel.grid.minor = element_blank()
+    panel.grid.major = element_line(color = "grey90"),
+    panel.grid.minor = element_blank(),
+    text = element_text(family = "sans"),
+    legend.key.height = unit(0.55, "cm"),
+    legend.title = element_text(size = 12, face = "bold")
   ) +
   labs(
-    title    = "Predicted Diameter at Breast Height (DBH)",
-    subtitle = "Cloud2Trees crowns + Random Forest model + Hillshade"
+    title = "Random Forest (Pooled)",
+    subtitle = "Full-Footprint DBH Predictions",
+    x = NULL, y = NULL
   )
+
+
+
+# ============================================================
+# 2. Make LOG–LOG FULL-FOOTPRINT MAP
+# ============================================================
+
+map_loglog <- ggplot() +
+  geom_sf(
+    data = crowns_loglog_all,               # combined Sequoia + Non-Sequoia predictions
+    aes(fill = pred_DBH_cm),
+    color = "grey20",
+    size  = 0.12
+  ) +
+  scale_fill_scico(
+    palette = "vik",
+    name = "Predicted DBH (cm)",
+    na.value = "grey90",
+    limits = c(50, 320),
+    breaks = seq(50, 300, 50)
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_line(color = "grey90"),
+    panel.grid.minor = element_blank(),
+    text = element_text(family = "sans"),
+    legend.key.height = unit(0.55, "cm"),
+    legend.title = element_text(size = 12, face = "bold")
+  ) +
+  labs(
+    title = "Log–Log (Sequoia + Non-Sequoia)",
+    subtitle = "Full-Footprint DBH Predictions",
+    x = NULL, y = NULL
+  )
+
+
+
+# ============================================================
+# 3. SIDE-BY-SIDE COMPARISON MAP
+# ============================================================
+
+library(patchwork)
+
+final_compare <- map_rf | map_loglog +
+  plot_annotation(
+    title = "DBH Predictions Across Full Footprint",
+    subtitle = "Random Forest (pooled) vs Log–Log (species-specific)",
+    theme = theme(
+      plot.title = element_text(size = 16, face = "bold"),
+      plot.subtitle = element_text(size = 12)
+    )
+  )
+
+final_compare
+
+------------
+  
+  
+  
+  
+  
+  
+  
+  
+  
+las_full   <- readLAS("E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/3x/3xCross_20241022194753_clip_clip.las")
+
+crowns_full <- st_read("E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/ROI_Las/3x_Cross/3x_Cross_crowns_all.gpkg") %>%
+  rename(lidar_height = tree_height_m)
+
+dtm_full  <- rast("E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/3x/DEMs/3xSide_20241022190851_DTM.tif")
+ndvi_full <- rast("C:/Users/User/Desktop/RandomForest2/NDVI.tif")
+
+
+compute_crown_metrics <- function(las, crowns, dtm, ndvi) {
+
+  las_norm <- normalize_height(classify_ground(las, csf()), knnidw())
+  slope    <- terrain(dtm, v = "slope", unit = "degrees")
+
+  metrics_list <- map_dfr(seq_len(nrow(crowns)), function(i) {
+
+    crown_poly <- crowns[i, ]
+    las_clip   <- clip_roi(las_norm, crown_poly)
+
+    if (is.null(las_clip) || npoints(las_clip) == 0) {
+      return(tibble(
+        treeID        = crown_poly$treeID,
+        crown_area_m2 = as.numeric(st_area(crown_poly)),
+        point_density = NA,
+        slope_mean    = NA,
+        ndvi_mean     = NA,
+        max_z = NA, mean_z = NA, p25 = NA, p50 = NA, p75 = NA, p95 = NA,
+        sd_z = NA, cv_z = NA
+      ))
+    }
+
+    Z <- las_clip@data$Z
+
+    tibble(
+      treeID        = crown_poly$treeID,
+      crown_area_m2 = as.numeric(st_area(crown_poly)),
+      point_density = npoints(las_clip) / as.numeric(st_area(crown_poly)),
+      slope_mean    = exact_extract(slope, crown_poly, "mean"),
+      ndvi_mean     = exact_extract(ndvi, crown_poly, "mean"),
+      max_z = max(Z), mean_z = mean(Z),
+      p25 = quantile(Z, 0.25), p50 = quantile(Z, 0.50),
+      p75 = quantile(Z, 0.75), p95 = quantile(Z, 0.95),
+      sd_z = sd(Z), cv_z = sd(Z) / mean(Z)
+    )
+  })
+
+  left_join(
+    crowns %>% select(treeID, geom),
+    metrics_list,
+    by = "treeID"
+  )
+}
+
+crown_metrics_full <- compute_crown_metrics(
+  las = las_full, crowns = crowns_full, dtm = dtm_full, ndvi = ndvi_full
+)
+
+# attach lidar height
+crown_metrics_full <- crown_metrics_full %>%
+  left_join(
+    crowns_full %>% st_drop_geometry() %>% select(treeID, lidar_height, is_sequoia),
+    by = "treeID"
+  )
+
+# prediction dataframe
+crown_data_full <- crown_metrics_full %>%
+  st_drop_geometry() %>%
+  mutate(
+    log_height = log(lidar_height),
+    log_area   = log1p(crown_area_m2)
+  )
+
+good <- complete.cases(crown_data_full)
+rf_pred <- exp(predict(rf_base, newdata = crown_data_full[good, ]))
+
+rf_table <- tibble(
+  treeID = crown_data_full$treeID[good],
+  pred_RF = rf_pred
+)
+
+crowns_full <- crowns_full %>%
+  left_join(rf_table, by = "treeID")   # RF predictions stored as pred_RF
+
+# Split
+seq_full    <- crowns_full %>% filter(is_sequoia == 1)
+nonseq_full <- crowns_full %>% filter(is_sequoia == 0)
+
+# Prediction dataframes
+pred_seq <- seq_full %>% st_drop_geometry() %>%
+  mutate(log_height = log(lidar_height), log_area = log1p(crown_area_m2))
+
+pred_nonseq <- nonseq_full %>% st_drop_geometry() %>%
+  mutate(log_height = log(lidar_height), log_area = log1p(crown_area_m2))
+
+# Predictions
+seq_pred    <- exp(predict(final_loglog_seq,    newdata = pred_seq))
+nonseq_pred <- exp(predict(final_loglog_nonseq, newdata = pred_nonseq))
+
+# Attach predictions
+seq_full    <- seq_full    %>% mutate(pred_LogLog = seq_pred)
+nonseq_full <- nonseq_full %>% mutate(pred_LogLog = nonseq_pred)
+
+# Combine both species
+crowns_loglog_all <- bind_rows(seq_full, nonseq_full)
+
+map_rf <- ggplot() +
+  geom_sf(data = crowns_full, aes(fill = pred_RF), color = "grey10", size = 0.1) +
+  scale_fill_scico(palette = "vik", name = "Predicted DBH (cm)",
+                   na.value = "grey80", limits = c(50,300)) +
+  theme_bw() +
+  labs(title = "Random Forest (Pooled)", subtitle = "Full-Footprint DBH")
+
+map_loglog <- ggplot() +
+  geom_sf(data = crowns_loglog_all, aes(fill = pred_LogLog), color = "grey10", size = 0.1) +
+  scale_fill_scico(palette = "vik", name = "Predicted DBH (cm)",
+                   na.value = "grey80", limits = c(50,300)) +
+  theme_bw() +
+  labs(title = "Log–Log (Species-Specific)", subtitle = "Full-Footprint DBH")
+
+final_compare <- map_rf | map_loglog +
+  plot_annotation(
+    title = "DBH Predictions Across Full Footprint",
+    subtitle = "Random Forest (pooled) vs Log–Log (species-specific)"
+  )
+
+final_compare
+
