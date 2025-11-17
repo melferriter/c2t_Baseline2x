@@ -24,14 +24,14 @@ library(ggpp)
 library(MetBrewer)
 library(scico)
 
-set.seed(444)
-
 # ------------------------------------------------------------
 # Global options
 # ------------------------------------------------------------
-CV_K      <- 3      # k-fold CV across all models
-N_TREES   <- 1000   # RF trees
+set.seed(12345)        # master seed — fully deterministic runs
+CV_K      <- 3         # k-fold CV for all models
+N_TREES   <- 1000      # RF tree count
 THEME_BW  <- TRUE
+options(mc.cores = 1)  # ensure reproducibility
 
 if (THEME_BW) theme_set(theme_bw())
 
@@ -40,45 +40,53 @@ if (THEME_BW) theme_set(theme_bw())
 # ============================================================
 files <- list(
   Fusion = list(
-    las    = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/ROI_Las/Combo/20250825_SFM_3xSide.las",
-    crowns = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/ROI_Las/SFM/SFMcombo_crowns.gpkg",
-    field  = "C:/Users/User/Desktop/RandomForest3/fieldpoints_sfmcombo_1.csv",
-    idcol  = "SFMcombo"
+    las         = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/ROI_Las/Combo/20250825_SFM_3xSide.las",
+    crowns      = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/ROI_Las/SFM/SFMcombo_crowns.gpkg",
+    field       = "C:/Users/User/Desktop/RandomForest3/fieldpoints_sfmcombo_1.csv",
+    idcol       = "SFMcombo",
+    height_col  = "SFMcomb_ht"
   ),
+  
   LiDAR = list(
-    las    = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/ROI_Las/sidelap3x_clipped.las",
-    crowns = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/ROI_Las/3x_Side/3x_Side_crowns.gpkg",
-    field  = "C:/Users/User/Desktop/RandomForest3/fieldpoints_side3x.csv",
-    idcol  = "Side3x"
+    las         = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/ROI_Las/sidelap3x_clipped.las",
+    crowns      = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/ROI_Las/3x_Side/3x_Side_crowns.gpkg",
+    field       = "C:/Users/User/Desktop/RandomForest3/fieldpoints_side3x.csv",
+    idcol       = "Side3x",
+    height_col  = "Side3x_ht"
   ),
+  
   SfM = list(
-    las    = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/ROI_Las/sfm_clipped.las",
-    crowns = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/ROI_Las/SFM/SFMonly_crowns.gpkg",
-    field  = "C:/Users/User/Desktop/RandomForest3/fieldpoints_sfmonly_1.csv",
-    idcol  = "SFMonly"
+    las         = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/ROI_Las/sfm_clipped.las",
+    crowns      = "E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/ROI_Las/SFM/SFMonly_crowns.gpkg",
+    field       = "C:/Users/User/Desktop/RandomForest3/fieldpoints_sfmonly_1.csv",
+    idcol       = "SFMonly",
+    height_col  = "SFMonly_ht"
   )
 )
+
 
 id_map <- list(Fusion = "SFMcombo", LiDAR = "Side3x", SfM = "SFMonly")
 
 dtm  <- rast("E:/Grad School/Data/UAS/Sequoia_National_Forest/2024/2024101222_processed/Agisoft/3x/DEMs/3xSide_20241022190851_DTM.tif")
 ndvi <- rast("C:/Users/User/Desktop/RandomForest2/NDVI.tif")
 
-# ============================================================
-# 2) Cross-validation setup
-# ============================================================
-ctrl <- trainControl(
-  method          = "cv",
-  number          = CV_K,
+
+###############################################################################
+# 1.2) CROSS-VALIDATION CONTROL
+###############################################################################
+
+ctrl_default <- trainControl(
+  method = "cv",
+  number = CV_K,
   savePredictions = "final",
   returnResamp    = "final"
 )
 
-# ============================================================
-# 3) Helpers
-# ============================================================
+###########################################################################
+### 2) HELPER FUNCTIONS
+###########################################################################
 
-# ---- 3.1 Basic metrics ----
+# --- 2.1: Compute metrics
 compute_metrics <- function(df) {
   obs  <- df$obs_cm
   pred <- df$pred_cm
@@ -88,37 +96,21 @@ compute_metrics <- function(df) {
   bias_val <- mean(pred - obs, na.rm = TRUE)
 
   tibble(
-    R2_cor    = cor(obs, pred, use = "complete.obs")^2,
-    R2_pseudo = 1 - sum((obs - pred)^2) / sum((obs - mean(obs))^2),
-    RMSE      = rmse_val,
-    MAE       = mae_val,
-    Bias      = bias_val,
-    RMSE_pct  = 100 * rmse_val / mean(obs, na.rm = TRUE)
+    R2_cor   = cor(obs, pred, use="complete.obs")^2,
+    RMSE     = rmse_val,
+    RMSE_pct = 100 * rmse_val / mean(obs, na.rm = TRUE),
+    MAE      = mae_val,
+    Bias     = bias_val
   )
 }
 
-# ---- 3.2 Pooled metrics (yardstick version if needed) ----
-pooled_metrics <- function(df, truth = obs_cm, estimate = pred_cm) {
-  metrics <- metric_set(rmse, rsq_trad, mae)
-  out <- metrics(df, truth = {{ truth }}, estimate = {{ estimate }})
-
-  truth_vec <- df[[deparse(substitute(truth))]]
-  est_vec   <- df[[deparse(substitute(estimate))]]
-
-  pct_rmse <- 100 * rmse_vec(truth_vec, est_vec) /
-    mean(truth_vec, na.rm = TRUE)
-
-  list(tbl = out, pct_rmse = pct_rmse)
-}
-
-# ---- 3.3 RF: collect out-of-sample predictions ----
+# --- 2.2: RF out-of-sample (OOS)
 collect_rf_oos <- function(model, data, label, flight) {
   best <- model$bestTune
-
   model$pred %>%
     semi_join(best, by = names(best)) %>%
     transmute(
-      id      = rowIndex,
+      id = rowIndex,
       obs_cm  = exp(obs),
       pred_cm = exp(pred),
       Species = data$Species[rowIndex],
@@ -128,265 +120,229 @@ collect_rf_oos <- function(model, data, label, flight) {
     group_by(id, Species, Model, Flight) %>%
     summarise(
       obs_cm  = first(obs_cm),
-      pred_cm = mean(pred_cm, na.rm = TRUE),
+      pred_cm = mean(pred_cm),
       .groups = "drop"
     )
 }
 
-# ---- 3.4 Log–log models with k-fold CV (no repeats) ----
+# --- 2.3: Log-log CV (deterministic)
 collect_loglog_oos <- function(data, formula, label, flight, k = CV_K) {
-  all_preds <- vector("list", k)
-  fold_ids  <- createFolds(data$dbh_cm, k = k)
+  set.seed(12345)
+  if (nrow(data) < 20) k <- 2
 
-  for (i in seq_along(fold_ids)) {
-    test_idx <- fold_ids[[i]]
-    train    <- data[-test_idx, ]
-    test     <- data[ test_idx, ]
+  folds <- createFolds(data$dbh_cm, k = k, list = TRUE)
 
-    if (nrow(test) < 2) next
+  out <- lapply(folds, function(test_idx) {
+    train <- data[-test_idx, ]
+    test  <- data[test_idx, ]
 
-    fit <- lm(formula, data = train)
+    fit <- lm(formula, data=train)
 
-    all_preds[[i]] <- tibble(
+    tibble(
       obs_cm  = test$dbh_cm,
-      pred_cm = exp(predict(fit, newdata = test)),
+      pred_cm = exp(predict(fit, newdata=test)),
       Species = test$Species,
       Model   = label,
       Flight  = flight
     )
-  }
+  })
 
-  bind_rows(all_preds)
+  bind_rows(out)
 }
 
-# ---- 3.5 Mixed-effects CV (k-fold, no repeats) ----
+# --- 2.4: Mixed-effects pooled CV (ME1)
 evaluate_lmer_cv_pooled <- function(data, k = CV_K, label, flight) {
+  set.seed(12345)
+  if (nrow(data) < 20) k <- 2
 
-  # For tiny-N subsets, lower k
-  if (nrow(data) < 15 && k > 3) k <- 3
+  folds <- createFolds(data$dbh_cm, k = k, list=TRUE)
 
-  folds     <- createFolds(data$dbh_cm, k = k, list = TRUE)
-  all_preds <- vector("list", k)
-
-  for (i in seq_along(folds)) {
-    test_idx <- folds[[i]]
-    train    <- data[-test_idx, ]
-    test     <- data[ test_idx, ]
+  out <- lapply(folds, function(test_idx) {
+    train <- data[-test_idx, ]
+    test  <- data[test_idx, ]
 
     fit <- lmer(
-      log(dbh_cm) ~ log(lidar_height) + log1p(crown_area_m2) + (1 | Species),
-      data = train
+      log(dbh_cm) ~ log_height + log1p(crown_area_m2) + (1|Species),
+      data=train
     )
 
-    all_preds[[i]] <- tibble(
+    tibble(
       id      = test_idx,
       obs_cm  = test$dbh_cm,
-      pred_cm = exp(predict(fit, newdata = test, allow.new.levels = TRUE)),
+      pred_cm = exp(predict(fit, newdata=test, allow.new.levels=TRUE)),
       Species = test$Species,
       Model   = label,
       Flight  = flight
     )
-  }
+  })
 
-  oos <- bind_rows(all_preds) %>%
+  oos <- bind_rows(out) %>%
     group_by(id, Species, Model, Flight) %>%
     summarise(
       obs_cm  = first(obs_cm),
-      pred_cm = mean(pred_cm, na.rm = TRUE),
+      pred_cm = mean(pred_cm),
       .groups = "drop"
     )
 
-  list(
-    preds   = oos,
-    metrics = compute_metrics(oos)
-  )
+  list(preds=oos, metrics=compute_metrics(oos))
 }
 
-# ---- 3.6 Formatter for mean ± SD ----
-fmt_pm <- function(mean, sd, digits = 3) {
-  ifelse(
-    !is.na(mean),
-    sprintf(paste0("%.", digits, "f ± %.", digits, "f"), mean, sd),
-    NA
-  )
-}
 
-# ---- 3.7 Bootstrap CIs for bias / RMSE (used in residual plots) ----
-boot_ci <- function(residuals, stat = c("bias", "rmse"), R = 2000, seed = 42) {
-  stat <- match.arg(stat)
-  set.seed(seed)
+###########################################################################
+### 3) MAIN TRAINING LOOP (ALL 6 MODELS)
+###########################################################################
 
-  f <- switch(
-    stat,
-    bias = function(x, i) mean(x[i], na.rm = TRUE),
-    rmse = function(x, i) sqrt(mean(x[i]^2, na.rm = TRUE))
-  )
-
-  b  <- boot(residuals, statistic = f, R = R)
-  ci <- boot.ci(b, type = "perc")$percent[4:5]
-  ci
-}
-
-# ============================================================
-# 4) Main loop across flights
-# ============================================================
 all_preds_all <- list()
+all_training_data <- list()
 
 for (flight in names(files)) {
+
   message("Processing: ", flight)
   f <- files[[flight]]
 
-  # ---- 4.1 Load LAS & crowns ----
-  las    <- readLAS(f$las)
-  crowns <- st_read(f$crowns, quiet = TRUE) %>%
+  # --- Load LAS + crowns
+  las_raw <- readLAS(f$las)
+  crowns  <- st_read(f$crowns, quiet=TRUE) %>%
     mutate(treeID = as.character(treeID))
 
-  # ---- 4.2 Load & clean field data ----
-  field <- readr::read_csv(f$field, show_col_types = FALSE) %>%
-    rename(treeID = !!sym(id_map[[flight]])) %>%
+  # --- Load field
+  field <- read_csv(f$field, show_col_types=FALSE) %>%
+    rename(treeID = !!sym(f$idcol)) %>%
     mutate(
       treeID = as.character(str_trim(treeID)),
-      Species = ifelse(grepl("Sequoia", Species, ignore.case = TRUE),
+      Species = ifelse(grepl("Sequoia", Species, ignore.case=TRUE),
                        "Sequoia", "Other"),
       is_sequoia = as.integer(Species == "Sequoia")
     ) %>%
-    rename_with(~ "lidar_height",
-                .cols = matches("SFMcomb_ht|Side3x_ht|SFMonly_ht")) %>%
-    dplyr::select(treeID, dbh_cm, lidar_height, Species, is_sequoia)
+    rename(lidar_height = !!sym(f$height_col)) %>%
+    select(treeID, dbh_cm, lidar_height, Species, is_sequoia)
 
-  # ---- 4.3 Normalize LAS & compute terrain ----
-  las_norm <- normalize_height(classify_ground(las, csf()), knnidw())
-  slope    <- terrain(dtm, v = "slope", unit = "degrees")
+  # --- Normalize LAS
+  las_norm <- normalize_height(classify_ground(las_raw, csf()), knnidw())
+  slope_rast <- terrain(dtm, v="slope", unit="degrees")
 
-  # ---- 4.4 Crown metrics (LiDAR + NDVI + area) ----
+  # --- Crown metrics
   metrics_list <- map_dfr(seq_len(nrow(crowns)), function(i) {
     crown_poly <- crowns[i, ]
     las_clip   <- clip_roi(las_norm, crown_poly)
 
-    if (is.null(las_clip) || npoints(las_clip) == 0) {
+    if (is.null(las_clip) || npoints(las_clip)==0)
       return(tibble(
-        treeID        = crown_poly$treeID,
-        crown_area_m2 = as.numeric(st_area(crown_poly))
+        treeID = crown_poly$treeID,
+        crown_area_m2 = as.numeric(st_area(crown_poly)),
+        point_density = NA, slope_mean = NA, ndvi_mean = NA,
+        max_z = NA, mean_z = NA, p25=NA, p50=NA, p75=NA, p95=NA,
+        sd_z = NA, cv_z = NA
       ))
-    }
 
     Z <- las_clip@data$Z
 
     tibble(
       treeID        = crown_poly$treeID,
-      point_density = npoints(las_clip) / as.numeric(st_area(crown_poly)),
-      slope_mean    = exact_extract(slope, crown_poly, "mean"),
-      max_z         = max(Z, na.rm = TRUE),
-      mean_z        = mean(Z, na.rm = TRUE),
-      p25           = quantile(Z, 0.25, na.rm = TRUE),
-      p50           = quantile(Z, 0.50, na.rm = TRUE),
-      p75           = quantile(Z, 0.75, na.rm = TRUE),
-      p95           = quantile(Z, 0.95, na.rm = TRUE),
-      sd_z          = sd(Z, na.rm = TRUE),
-      cv_z          = sd(Z, na.rm = TRUE) / mean(Z, na.rm = TRUE),
+      crown_area_m2 = as.numeric(st_area(crown_poly)),
+      point_density = npoints(las_clip)/as.numeric(st_area(crown_poly)),
+      slope_mean    = exact_extract(slope_rast, crown_poly, "mean"),
       ndvi_mean     = exact_extract(ndvi, crown_poly, "mean"),
-      crown_area_m2 = as.numeric(st_area(crown_poly))
+      max_z = max(Z),
+      mean_z = mean(Z),
+      p25 = quantile(Z,0.25), p50 = quantile(Z,0.50),
+      p75 = quantile(Z,0.75), p95 = quantile(Z,0.95),
+      sd_z = sd(Z),
+      cv_z = sd(Z)/mean(Z)
     )
   })
 
-  crowns_metrics <- crowns %>%
-    dplyr::select(treeID, geom) %>%
-    left_join(metrics_list, by = "treeID") %>%
-    dplyr::select(
-      treeID, crown_area_m2, point_density, slope_mean, ndvi_mean,
-      max_z, mean_z, p25, p50, p75, p95, sd_z, cv_z, geom
-    )
-
-  # ---- 4.5 Join field + crown metrics ----
-  crowns_final <- crowns_metrics %>%
-    inner_join(field, by = "treeID") %>%
-    filter(Species != "intact snag", dbh_cm > 0)
-
-  stopifnot("dbh_cm" %in% names(crowns_final))
+  crowns_final <- crowns %>%
+    select(treeID, geom) %>%
+    left_join(metrics_list, by="treeID") %>%
+    inner_join(field, by="treeID") %>%
+    filter(dbh_cm > 0, dbh_cm < 350)
 
   crown_data <- crowns_final %>%
-    filter(!is.na(dbh_cm), dbh_cm > 0, dbh_cm < 350) %>%
     mutate(
+      log_height     = log(pmax(lidar_height,0.5)),
+      log_crown_area = log1p(crown_area_m2),
       log_dbh        = log(dbh_cm),
-      log_height     = log(lidar_height),
-      log_crown_area = log1p(crown_area_m2)
+      Flight = flight
     ) %>%
     drop_na()
 
-  # ========================================================
-  # 4.6 Models (all with pooled OOS predictions)
-  # ========================================================
+  all_training_data[[flight]] <- crown_data
 
-  # ---- 4.6.1 RF (pooled) ----
+
+  #######################################################################
+  ### 3.1  Train ALL 6 models (ME1 option)
+  #######################################################################
+
+  # 1) RF pooled
   rf_base <- train(
-    log(dbh_cm) ~ log(lidar_height) + log1p(crown_area_m2) +
-      p95 + p75 + p50 + mean_z + max_z + sd_z + cv_z +
-      point_density + slope_mean + ndvi_mean,
-    data        = crown_data,
-    method      = "rf",
-    trControl   = ctrl,
-    tuneLength  = 5,
-    ntree       = N_TREES
+    log(dbh_cm) ~ log_height + log_crown_area +
+      p95+p75+p50+mean_z+max_z+sd_z+cv_z+
+      point_density+slope_mean+ndvi_mean,
+    data = crown_data,
+    method="rf",
+    trControl=ctrl_default,
+    tuneLength=5,
+    ntree=N_TREES
   )
   oos_rf_base <- collect_rf_oos(rf_base, crown_data, "RF (pooled)", flight)
 
-  # ---- 4.6.2 Mixed-effects (pooled) ----
-  mix_cv  <- evaluate_lmer_cv_pooled(
+  # 2) Mixed-effects pooled
+  mix_cv <- evaluate_lmer_cv_pooled(
     crown_data, k = CV_K,
-    label = "Mixed-effects (pooled)", flight = flight
+    label="Mixed-effects (pooled)", flight=flight
   )
   oos_mix <- mix_cv$preds
 
-  # ---- 4.6.3 Species-specific RF ----
+  # 3) RF Sequoia-only
+  seq_data <- filter(crown_data, is_sequoia==1)
+  seq_ctrl <- if (nrow(seq_data) < 20)
+                trainControl(method="cv", number=2, savePredictions="final")
+              else ctrl_default
+
   rf_seq <- train(
-    log(dbh_cm) ~ log(lidar_height) + log1p(crown_area_m2) +
-      p95 + p75 + p50 + mean_z + max_z + sd_z + cv_z +
-      point_density + slope_mean + ndvi_mean,
-    data        = filter(crown_data, is_sequoia == 1),
-    method      = "rf",
-    trControl   = ctrl,
-    tuneLength  = 5,
-    ntree       = N_TREES
+    log(dbh_cm) ~ log_height + log_crown_area +
+      p95+p75+p50+mean_z+max_z+sd_z+cv_z+
+      point_density+slope_mean+ndvi_mean,
+    data = seq_data,
+    method="rf",
+    trControl = seq_ctrl,
+    tuneLength=5,
+    ntree=N_TREES
   )
-  oos_rf_seq <- collect_rf_oos(
-    rf_seq, filter(crown_data, is_sequoia == 1),
-    "RF (Sequoia-only)", flight
-  )
+  oos_rf_seq <- collect_rf_oos(rf_seq, seq_data, "RF (Sequoia-only)", flight)
+
+  # 4) RF Non-sequoia
+  nonseq_data <- filter(crown_data, is_sequoia==0)
 
   rf_nonseq <- train(
-    log(dbh_cm) ~ log(lidar_height) + log1p(crown_area_m2) +
-      p95 + p75 + p50 + mean_z + max_z + sd_z + cv_z +
-      point_density + slope_mean + ndvi_mean,
-    data        = filter(crown_data, is_sequoia == 0),
-    method      = "rf",
-    trControl   = ctrl,
-    tuneLength  = 5,
-    ntree       = N_TREES
+    log(dbh_cm) ~ log_height + log_crown_area +
+      p95+p75+p50+mean_z+max_z+sd_z+cv_z+
+      point_density+slope_mean+ndvi_mean,
+    data = nonseq_data,
+    method="rf",
+    trControl=ctrl_default,
+    tuneLength=5,
+    ntree=N_TREES
   )
-  oos_rf_nonseq <- collect_rf_oos(
-    rf_nonseq, filter(crown_data, is_sequoia == 0),
-    "RF (Non-sequoia)", flight
-  )
+  oos_rf_nonseq <- collect_rf_oos(rf_nonseq, nonseq_data, "RF (Non-sequoia)", flight)
 
-  # ---- 4.6.4 Log–log allometry ----
+  # 5) Log–log Sequoia-only
   oos_loglog_seq <- collect_loglog_oos(
-    filter(crown_data, is_sequoia == 1),
-    log(dbh_cm) ~ log(lidar_height) +
-      log(pmax(crown_area_m2, 0.01)),
-    "Log–log (Sequoia-only)",
-    flight
+    seq_data,
+    log(dbh_cm) ~ log_height + log(pmax(crown_area_m2,0.01)),
+    "Log–log (Sequoia-only)", flight
   )
 
+  # 6) Log–log Non-sequoia
   oos_loglog_nonseq <- collect_loglog_oos(
-    filter(crown_data, is_sequoia == 0),
-    log(dbh_cm) ~ log(lidar_height) +
-      log(pmax(crown_area_m2, 0.01)),
-    "Log–log (Non-sequoia)",
-    flight
+    nonseq_data,
+    log(dbh_cm) ~ log_height + log(pmax(crown_area_m2,0.01)),
+    "Log–log (Non-sequoia)", flight
   )
 
-  # ---- 4.6.5 Combine predictions for this flight ----
-  preds_store <- bind_rows(
+  # Store
+  all_preds_all[[flight]] <- bind_rows(
     oos_rf_base,
     oos_mix,
     oos_rf_seq,
@@ -394,71 +350,73 @@ for (flight in names(files)) {
     oos_loglog_seq,
     oos_loglog_nonseq
   )
-
-  all_preds_all[[flight]] <- preds_store
 }
 
-# ============================================================
-# 5) Combine predictions + metrics
-# ============================================================
+
+###########################################################################
+### 4) FINAL LOG–LOG MODELS USING ALL TRAINING DATA
+###########################################################################
+
+training_combined <- bind_rows(all_training_data)
+
+final_loglog_seq <- lm(
+  log(dbh_cm) ~ log_height + log(pmax(crown_area_m2,0.01)),
+  data = filter(training_combined, is_sequoia==1)
+)
+
+final_loglog_nonseq <- lm(
+  log(dbh_cm) ~ log_height + log(pmax(crown_area_m2,0.01)),
+  data = filter(training_combined, is_sequoia==0)
+)
+
+
+###########################################################################
+### 5) COLLAPSE OOS PREDICTIONS + METRICS
+###########################################################################
+
 preds_all <- bind_rows(all_preds_all) %>%
   filter(is.finite(obs_cm), is.finite(pred_cm)) %>%
   mutate(
     residual_cm = pred_cm - obs_cm,
-    Model = factor(
-      Model,
-      levels = c(
-        "Mixed-effects (pooled)",
-        "RF (pooled)",
-        "RF (Sequoia-only)",
-        "Log–log (Sequoia-only)",
-        "RF (Non-sequoia)",
-        "Log–log (Non-sequoia)"
-      )
-    )
+    Model = factor(Model, levels = c(
+      "Mixed-effects (pooled)",
+      "RF (pooled)",
+      "RF (Sequoia-only)",
+      "Log–log (Sequoia-only)",
+      "RF (Non-sequoia)",
+      "Log–log (Non-sequoia)"
+    ))
   )
 
-# Collapse any remaining duplicates (e.g., from multiple CV splits)
 preds_all_collapsed <- preds_all %>%
   group_by(Flight, Model, Species, obs_cm) %>%
   summarise(
-    pred_cm     = mean(pred_cm,     na.rm = TRUE),
-    residual_cm = mean(residual_cm, na.rm = TRUE),
-    .groups = "drop"
+    pred_cm     = mean(pred_cm),
+    residual_cm = mean(residual_cm),
+    .groups="drop"
   )
 
-# Sequoia-only model
-final_loglog_seq <- lm(
-  log(dbh_cm) ~ log(lidar_height) + log(pmax(crown_area_m2, 0.01)),
-  data = filter(crown_data, is_sequoia == 1)
-)
-
-# Non-sequoia model
-final_loglog_nonseq <- lm(
-  log(dbh_cm) ~ log(lidar_height) + log(pmax(crown_area_m2, 0.01)),
-  data = filter(crown_data, is_sequoia == 0)
-)
-
-# ---- 5.1 Metrics per Flight × Model ----
 metrics_labels <- preds_all_collapsed %>%
   group_by(Flight, Model) %>%
   group_modify(~ compute_metrics(.x)) %>%
   ungroup() %>%
   mutate(
     label = glue(
-      "R^2 = {round(R2_cor, 2)}",
-      "\nRMSE = {round(RMSE, 1)} cm ({round(RMSE_pct, 1)}%)",
-      "\nMAE = {round(MAE, 1)}",
-      "\nBias = {round(Bias, 1)}"
+      "R^2 = {round(R2_cor,2)}",
+      "\nRMSE = {round(RMSE,1)} cm ({round(RMSE_pct,1)}%)",
+      "\nMAE = {round(MAE,1)}",
+      "\nBias = {round(Bias,1)}"
     )
   )
+
+
 
 # ============================================================
 # 6) Figures
 
 # ---- 6.1 Predicted vs Observed (Fusion) ----
 metrics_labels <- preds_all_collapsed %>%
-  filter(Flight == "Fusion") %>%
+  filter(Flight == "SfM") %>%
   group_by(Model) %>%
   summarise(
     r2       = cor(obs_cm, pred_cm)^2,
@@ -488,7 +446,7 @@ metrics_labels <- preds_all_collapsed %>%
   mutate(npcx = 0.02, npcy = 0.98)   # for npc positioning
 
 fig_species_scatter <- ggplot(
-  preds_all_collapsed %>% filter(Flight == "Fusion"),
+  preds_all_collapsed %>% filter(Flight == "SfM"),
   aes(obs_cm, pred_cm, color = Species)
 ) +
   # 1: 1:1 reference line
@@ -525,7 +483,7 @@ fig_species_scatter <- ggplot(
   labs(
     x = "Observed DBH (cm)",
     y = "Predicted DBH (cm)",
-    title = "Predicted vs. Observed DBH (Fusion)",
+    title = "Predicted vs. Observed DBH (SfM)",
     color = "Species"
   ) +
   theme_bw(base_size = 12) +
@@ -541,7 +499,7 @@ fig_species_scatter
 
 
 ggsave(
-  "Predicted_vs_Observed_DBH_Fusion.png",
+  "20251116_Predicted_vs_Observed_DBH_SfM.png",
   fig_species_scatter,
   width = 6.7,
   height = 6,
@@ -552,7 +510,7 @@ ggsave(
 
 # ---- 6.2 Residuals vs Predicted (Fusion, key models) ----
 resid_labels <- preds_all_collapsed %>%
-  filter(Flight == "Fusion") %>%
+  filter(Flight == "SfM") %>%
   group_by(Model) %>%                      # <<< ONLY Model, NOT Species
   summarise(
     n        = n(),
@@ -574,12 +532,12 @@ resid_labels <- preds_all_collapsed %>%
   )
 
 
-
-
 library(ggpp)
 
+
+
 fig_residuals <- ggplot(
-  preds_all_collapsed %>% filter(Flight == "Fusion"),
+  preds_all_collapsed %>% filter(Flight == "SfM"),
   aes(x = pred_cm, y = residual_cm, color = Species)
 ) +
   geom_hline(yintercept = 0, linetype = "dashed",
@@ -605,7 +563,7 @@ geom_smooth(method="lm", se=TRUE,
   labs(
     x = "Predicted DBH (cm)",
     y = "Residual (Predicted – Observed, cm)",
-    title = "Residuals vs. Predicted DBH (Fusion)"
+    title = "Residuals vs. Predicted DBH (SfM)"
   ) +
   theme_bw(base_size = 12) +
   theme(
@@ -621,7 +579,7 @@ fig_residuals
 
 
 ggsave(
-  "Residuals_DBH_Fusion.png",
+  "20251116_Residuals_DBH_SfM.png",
   fig_residuals,
   width = 6.7,
   height = 6,
@@ -754,7 +712,7 @@ ggplot() +
   labs(
     title = "Predicted Diameter at Breast Height (DBH)",
     subtitle = "Cloud2Trees crowns + Random Forest model",
-    caption = "Grey polygons = No crown metrics / no prediction",
+    #caption = "Grey polygons = No crown metrics / no prediction",
     x = NULL,
     y = NULL
   )
@@ -835,36 +793,114 @@ ggplot() +
 # 1. Make RANDOM FOREST FULL-FOOTPRINT MAP
 # ============================================================
 
+
+crowns_ll <- st_transform(crowns_full, 4326)
+
+# ------------------------------------------------------------
+# 0. Compute lon/lat limits and mid point
+# ------------------------------------------------------------
+
+lon_min <- min(crowns_ll$lon, na.rm = TRUE)
+lon_max <- max(crowns_ll$lon, na.rm = TRUE)
+lat_min <- min(crowns_ll$lat, na.rm = TRUE)
+lat_max <- max(crowns_ll$lat, na.rm = TRUE)
+
+# Small padding around plot
+pad <- 0.0003   # ~30 m
+
+# Mid longitude for 3 evenly spaced labels
+lon_mid <- mean(c(lon_min, lon_max))
+
+
+# ------------------------------------------------------------
+# 1. Build the map
+# ------------------------------------------------------------
 map_rf <- ggplot() +
   geom_sf(
-    data = crowns_full,                     # RF predictions stored in crowns_full
+    data = crowns_ll,
     aes(fill = pred_DBH_cm),
     color = "grey15",
-    size  = 0.10
+    linewidth = 0.10
   ) +
+
   scale_fill_scico(
-    palette = "vik",
-    name = "Predicted DBH (cm)",
+    palette   = "vik",
+    name      = "Predicted DBH (cm)",
     direction = 1,
-    na.value = "grey80",
-    limits = c(50, 300),
-    breaks = seq(50, 300, 50)
+    na.value  = "grey80",
+    limits    = c(
+      min(crowns_full$pred_DBH_cm, na.rm = TRUE),
+      max(crowns_full$pred_DBH_cm, na.rm = TRUE)
+    ),
+    breaks    = seq(50, 300, 50)
   ) +
+
+  # ---- AXIS CONTROL: 3 longitude ticks ----
+  scale_x_continuous(
+    breaks = c(lon_min, lon_mid, lon_max),
+    labels = scales::label_number(accuracy = 0.0001)
+  ) +
+
+  # ---- ZOOM-OUT ----
+  coord_sf(
+    xlim   = c(lon_min - pad, lon_max + pad),
+    ylim   = c(lat_min - pad, lat_max + pad),
+    expand = FALSE
+  ) +
+
+  # ---- TITLES ----
+  labs(
+    title = "LiDAR Flight - Random Forest (Pooled)",
+    x = NULL,
+    y = NULL
+  ) +
+
+  # ---- THEME ----
   theme_bw() +
   theme(
-    panel.grid.major = element_line(color = "grey90"),
+    panel.grid.major = element_blank(),
     panel.grid.minor = element_blank(),
+
     text = element_text(family = "sans"),
-    legend.key.height = unit(0.55, "cm"),
-    legend.title = element_text(size = 12, face = "bold")
-  ) +
-  labs(
-    title = "Random Forest (Pooled)",
-    subtitle = "Full-Footprint DBH Predictions",
-    x = NULL, y = NULL
+    axis.text.x = element_text(margin = margin(t = 6)),
+    axis.text.y = element_text(size = 10),
+
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.title = element_text(size = 10),
+    legend.key.width = unit(1.4, "cm"),
+    legend.key.height = unit(0.35, "cm"),
+    legend.margin = margin(t = -5),
+
+    plot.margin = margin(t = 5, r = 5, b = 25, l = 5)
   )
 
+map_rf
 
+
+
+
+
+
+  
+  
+
+ggsave(
+  "20251116_LiDAR_RF.png",
+  map_rf,
+  width = 7,
+  height = 7,
+  dpi = 300
+)
+
+st_write(
+  crowns_full,
+  "crowns_full.gpkg",
+  layer = "crowns_full",
+  delete_dsn = TRUE
+)
 
 # ============================================================
 # 2. Make LOG–LOG FULL-FOOTPRINT MAP
@@ -881,7 +917,7 @@ map_loglog <- ggplot() +
     palette = "vik",
     name = "Predicted DBH (cm)",
     na.value = "grey90",
-    limits = c(50, 320),
+    limits = c(min(crowns_loglog_all$pred_DBH_cm, na.rm = TRUE), max(crowns_loglog_all$pred_DBH_cm, na.rm = TRUE)), 
     breaks = seq(50, 300, 50)
   ) +
   theme_bw() +
@@ -894,9 +930,27 @@ map_loglog <- ggplot() +
   ) +
   labs(
     title = "Log–Log (Sequoia + Non-Sequoia)",
-    subtitle = "Full-Footprint DBH Predictions",
+    #subtitle = "Full-Footprint DBH Predictions",
     x = NULL, y = NULL
-  )
+  ) +
+   theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.title = element_text(size = 10),
+    legend.key.width = unit(1.4, "cm"),
+    legend.key.height = unit(0.35, "cm"),
+    legend.margin = margin(t = -5),
+    plot.margin = margin(t = 5, r = 5, b = 25, l = 5),   # ← increase bottom margin
+  axis.text.x = element_text(margin = margin(t = 6)) 
+    # pulls legend closer to plot
+)
+
+st_write(
+  crowns_loglog_all,
+  "crowns_loglog_all.gpkg",
+  layer = "crowns_loglog_all",
+  delete_dsn = TRUE
+)
 
 
 
@@ -908,22 +962,52 @@ library(patchwork)
 
 final_compare <- map_rf | map_loglog +
   plot_annotation(
-    title = "DBH Predictions Across Full Footprint",
+    #title = "DBH Predictions Across Full Footprint",
     subtitle = "Random Forest (pooled) vs Log–Log (species-specific)",
     theme = theme(
       plot.title = element_text(size = 16, face = "bold"),
-      plot.subtitle = element_text(size = 12)
+      plot.subtitle = element_text(size = 12),
+      panel.spacing = unit(-0.2, "lines")
     )
   )
 
 final_compare
 
+
+
+ggsave(
+  "20251116_RFvsLog_LiDAR.png",
+  final_compare,
+  width = 14,
+  height = 6,
+  dpi = 600
+)
+
+
+ggsave(
+  "20251116_RFvsLog_LiDAR.png",
+  plot = final_compare,
+  width = 9,        # much smaller
+  height = 4.2,
+  units = "in",
+  dpi = 300
+)
+
+
+ggsave(
+  "20251116_RFvsLog_LiDAR.png",
+  plot = final_compare,
+ width = 8,
+  height = 4.2,
+  dpi = 150
+)
 ------------
   
   
-  
-  
-  
+library(scico)
+library(patchwork)
+
+
   
   
   
